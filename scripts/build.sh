@@ -43,8 +43,12 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 # Hardened runtime: no injected code (DYLD_INSERT_LIBRARIES) borrowing the
-# app's Full Disk Access.
-codesign --force --sign - --options runtime "$app/Contents/Helpers/fsearch"
-codesign --force --sign - --options runtime "$app"
+# app's Full Disk Access. Ad-hoc unless SIGN_IDENTITY names a Developer ID
+# Application identity (see docs/RELEASING.md).
+identity="${SIGN_IDENTITY:--}"
+sign=(codesign --force --sign "$identity" --options runtime)
+[[ "$identity" == - ]] || sign+=(--timestamp)
+"${sign[@]}" "$app/Contents/Helpers/fsearch"
+"${sign[@]}" "$app"
 codesign --verify --deep --strict "$app"
 printf 'Built %s\n' "$app"
