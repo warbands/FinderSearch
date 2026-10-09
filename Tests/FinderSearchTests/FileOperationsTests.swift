@@ -182,6 +182,35 @@ final class FileOperationsTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 1)
     }
 
+    /// A stand-in engine: reads two requests, answers each with its own query as
+    /// `error`, in reverse order or as read.
+    func fakeEngine(reversed: Bool) throws -> Engine {
+        let reply = #"printf '{"id":%s,"ok":true,"error":"%s"}\n' "$(echo "$1" | sed -E 's/.*"id":([0-9]+).*/\1/')" "$(echo "$1" | sed -E 's/.*"q":"([^"]*)".*/\1/')""#
+        let script = "#!/bin/sh\nreply() { \(reply); }\nread a; read b\n"
+            + (reversed ? "reply \"$b\"; reply \"$a\"\n" : "reply \"$a\"; reply \"$b\"\n") + "exec /bin/sleep 5\n"
+        let binary = try write("fake-engine", script)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        return Engine(binary: binary.path)
+    }
+
+    func testConcurrentRequestsGetTheirOwnReplies() async throws {
+        let engine = try fakeEngine(reversed: true)
+        async let a = engine.request(["q": "first"])
+        async let b = engine.request(["q": "second"])
+        let (ra, rb) = try await (a, b)
+        XCTAssertEqual(ra.error, "first"); XCTAssertEqual(rb.error, "second")
+    }
+
+    func testCancelledRequestsLateReplyIsSkipped() async throws {
+        let engine = try fakeEngine(reversed: false)
+        let stale = Task { try await engine.request(["q": "stale"]) }
+        try await Task.sleep(for: .milliseconds(100))
+        stale.cancel()
+        do { _ = try await stale.value; XCTFail("Expected cancellation") } catch is CancellationError {}
+        let fresh = try await engine.request(["q": "fresh"])  // same helper, after the stale reply
+        XCTAssertEqual(fresh.error, "fresh")
+    }
+
     @MainActor func testSearchDebouncesToFinalQuery() async throws {
         let engine = RecordingSearchEngine()
         let model = SearchModel(engine: engine)

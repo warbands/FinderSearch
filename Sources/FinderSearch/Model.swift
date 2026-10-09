@@ -77,7 +77,7 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
     @Published var backStack: [URL] = []
     @Published var forwardStack: [URL] = []
     private let engine: any SearchService
-    init(engine: any SearchService = Engine()) { self.engine = engine }
+    init(engine: any SearchService = Engine.shared) { self.engine = engine }
     private var task: Task<Void, Never>?
     private var sortedCache: [Hit]?
     private var selectedCache: [Hit]?
