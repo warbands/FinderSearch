@@ -43,8 +43,14 @@ If the helper does not inherit the grant, add `FinderSearch.app/Contents/Helpers
 as well. Permissions may need refreshing after a rebuild.
 
 The first launch builds an index; searches become available as indexing progresses.
-Granting Full Disk Access later is picked up on the next launch: the folders that were
-skipped are scanned then.
+FinderSearch searches the startup drive and every local drive mounted in `/Volumes`.
+Network drives, hidden mounts and Time Machine backups are left out.
+
+Without Full Disk Access it skips the folders macOS guards (Desktop, Documents,
+Downloads, iCloud Drive, other apps' data) and other drives, and never looks inside
+them, so macOS doesn't ask about each one. On first launch FinderSearch explains how to
+turn on Full Disk Access and notices by itself once it's on: the engine restarts and
+scans what it skipped.
 
 ## Your search data
 
@@ -63,8 +69,9 @@ protects it without anything to set up:
 **FinderSearch → Forget Search Data…** deletes the index and its key; a new index is built
 straight away. Nothing is lost: the index only describes files that are still on disk.
 
-While the app is open, the decrypted index is held in memory: about 150 MB for
-1.9 million files, growing with the number of files you have. If the Keychain denies access to the key, the app
+While the app is open, the decrypted index is held in memory. Measured on one Mac with
+4.8 million files and 96,000 text files: about 370 MB, peaking near 670 MB during the
+first full build. It grows with the number of files you have. If the Keychain denies access to the key, the app
 uses a key for that session only and rebuilds the index.
 
 Protected folders, network volumes, unmounted drives, and cloud providers still

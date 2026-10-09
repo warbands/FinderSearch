@@ -17,6 +17,11 @@ FinderSearch's filename search is powered by **fsearch**, created by **Noah Dunn
   segments and skipped-folder list are sealed with AES-256-GCM; without one,
   files are written as upstream writes them. This adds the RustCrypto
   `aes-gcm` crate and its dependencies, all MIT OR Apache-2.0, to `Cargo.lock`.
+- `src/walk.rs`, `src/live.rs`: other local drives in /Volumes are indexed (upstream
+  stops at the startup volume), and changes reported on drives the index doesn't
+  cover are ignored rather than applied and dropped again at the next compaction.
+- `src/engine.rs`: without Full Disk Access, the guarded folders are skipped in every
+  home folder under /Users, not only in $HOME.
 
 Its copyright and license notice are included in every built app at
 `Contents/Resources/fsearch-LICENSE`. `vendor/fsearch/Cargo.lock` records its Rust

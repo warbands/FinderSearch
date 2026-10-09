@@ -163,8 +163,9 @@ impl Live {
     pub fn fetch(&self, path: &[u8], recursive: bool) -> Fetched {
         let p = normalize(path);
         let mut f = Fetched { path: p, recursive, blocked: false, attrs: None, listing: None, scans: HashMap::new() };
-        // Not even an lstat inside folders we may not touch.
-        if walk::blocked(&f.path) {
+        // Not even an lstat inside folders we may not touch, nor on drives
+        // the index doesn't cover.
+        if walk::blocked(&f.path) || !walk::indexed(&f.path) {
             f.blocked = true;
             return f;
         }

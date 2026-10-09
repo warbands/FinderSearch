@@ -2,12 +2,14 @@
 //!
 //! One syscall returns hundreds of entries with name, type, size, mtime and
 //! flags already attached, so there is no per-file stat. Directories fan out
-//! over a rayon pool; mount points are not crossed, firmlinks are (that is
-//! how /Users etc. on the data volume appear under / exactly once).
+//! over a rayon pool. Firmlinks are crossed (that is how /Users etc. on the
+//! data volume appear under / exactly once); mount points only into the
+//! other local drives (`crossable`).
 
 use rayon::Scope;
 use std::cell::RefCell;
 use std::ffi::CString;
+use std::os::unix::ffi::OsStrExt;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -22,6 +24,68 @@ pub static SKIP: std::sync::OnceLock<Vec<Vec<u8>>> = std::sync::OnceLock::new();
 /// silently denies some, like ~/Library/Mail. Recorded only while paths are
 /// tracked, i.e. while SKIP is set.
 pub static DENIED: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
+
+/// A mount point whose drive is indexed like the startup one: a local,
+/// browsable volume mounted directly in /Volumes. Network drives, hidden
+/// mounts and Time Machine backups stay out. Reads only the kernel's mount
+/// table, so a slow or dead network drive is never touched.
+pub fn crossable(mount: &[u8]) -> bool {
+    let Some(name) = mount.strip_prefix(b"/Volumes/") else { return false };
+    if name.is_empty() || name.contains(&b'/') || name[0] == b'.' {
+        return false;
+    }
+    let local = mounts().iter().any(|m| {
+        on(m) == mount && m.f_flags & libc::MNT_LOCAL as u32 != 0 && m.f_flags & libc::MNT_DONTBROWSE as u32 == 0
+    });
+    local && !std::path::Path::new(std::ffi::OsStr::from_bytes(mount)).join("Backups.backupdb").exists()
+}
+
+/// Is `path` on a drive the index covers: the startup volume (with its data
+/// volume) or a `crossable` one? The scan never enters any other, so changes
+/// reported there are ignored rather than half-applied.
+pub fn indexed(path: &[u8]) -> bool {
+    let mut p = path;
+    loop {
+        let Ok(c) = CString::new(p) else { return false };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } == 0 {
+            let m = on(&st);
+            return m == b"/" || m == b"/System/Volumes/Data" || crossable(m);
+        }
+        // Gone (say, deleted): decide by the folder it was in.
+        match p.iter().rposition(|&b| b == b'/') {
+            Some(0) if p.len() > 1 => p = b"/",
+            Some(i) if i > 0 => p = &p[..i],
+            _ => return false,
+        }
+    }
+}
+
+fn mounts() -> Vec<libc::statfs> {
+    let n = unsafe { libc::getfsstat(std::ptr::null_mut(), 0, libc::MNT_NOWAIT) };
+    let mut v: Vec<libc::statfs> = vec![unsafe { std::mem::zeroed() }; n.max(0) as usize + 8];
+    let size = (v.len() * std::mem::size_of::<libc::statfs>()) as i32;
+    let n = unsafe { libc::getfsstat(v.as_mut_ptr(), size, libc::MNT_NOWAIT) };
+    v.truncate(n.max(0) as usize);
+    v
+}
+
+fn on(m: &libc::statfs) -> &[u8] {
+    let s = &m.f_mntonname;
+    let len = s.iter().position(|&c| c == 0).unwrap_or(s.len());
+    unsafe { std::slice::from_raw_parts(s.as_ptr() as *const u8, len) }
+}
+
+/// The path an open folder is at, for the rare entry that is a mount point.
+fn fd_path(fd: i32) -> Option<Vec<u8>> {
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    if unsafe { libc::fcntl(fd, libc::F_GETPATH, buf.as_mut_ptr()) } < 0 {
+        return None;
+    }
+    buf.truncate(buf.iter().position(|&c| c == 0)?);
+    // A folder on the data volume may come back by its full path.
+    Some(buf.strip_prefix(b"/System/Volumes/Data").filter(|r| r.first() == Some(&b'/')).map_or(buf.clone(), <[u8]>::to_vec))
+}
 
 pub fn blocked(path: &[u8]) -> bool {
     SKIP.get().is_some_and(|v| v.iter().any(|s| path.starts_with(s) && (path.len() == s.len() || path[s.len()] == b'/')))
@@ -39,6 +103,8 @@ pub const KIND_OTHER: u8 = 3;
 pub const FLAG_HIDDEN: u8 = 1 << 2;
 /// Directory that is a mount point we did not descend into.
 pub const FLAG_MOUNT: u8 = 1 << 3;
+/// Transient, within `list_fd`: a mount point to check with `crossable`.
+const FLAG_CROSS: u8 = 1 << 7;
 
 #[derive(Clone, Copy)]
 pub struct RawEnt {
@@ -191,6 +257,15 @@ fn list_fd(fd: i32, l: &mut Listing) {
                 parse_entry(&buf[p..p + len], l);
                 p += len;
             }
+            // Mount points of other local drives are entered like folders.
+            let mut dir: Option<Option<Vec<u8>>> = None;
+            for e in l.ents.iter_mut().filter(|e| e.kind & FLAG_CROSS != 0) {
+                e.kind &= !FLAG_CROSS;
+                let name = &l.names[e.name_off as usize..][..e.name_len as usize];
+                if dir.get_or_insert_with(|| fd_path(fd)).as_ref().is_some_and(|d| crossable(&crate::live::join(d, name))) {
+                    e.kind &= !FLAG_MOUNT;
+                }
+            }
         }
     });
 }
@@ -233,8 +308,14 @@ fn parse_entry(b: &[u8], l: &mut Listing) {
         f += 4;
     }
     if dirattr & libc::ATTR_DIR_MOUNTSTATUS != 0 {
-        if rd32(b, f) & (libc::DIR_MNTSTATUS_MNTPOINT | DIR_MNTSTATUS_TRIGGER) != 0 {
+        let status = rd32(b, f);
+        if status & (libc::DIR_MNTSTATUS_MNTPOINT | DIR_MNTSTATUS_TRIGGER) != 0 {
             kind |= FLAG_MOUNT;
+            // A real mount (not an automount trigger): `list_fd` checks
+            // whether it's a drive to enter.
+            if status & DIR_MNTSTATUS_TRIGGER == 0 {
+                kind |= FLAG_CROSS;
+            }
         }
         f += 4;
     }
