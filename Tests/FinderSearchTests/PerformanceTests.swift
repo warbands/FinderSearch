@@ -4,7 +4,7 @@ import AppKit
 
 final class PerformanceTests: XCTestCase {
     @MainActor func testLargeFolderSelectionBudget() {
-        let model = SearchModel()
+        let model = SearchModel(engine: RecordingSearchEngine())
         model.hits = (0..<10000).map {
             Hit(path: "/fixture/file-\($0).txt", kind: "file", size: 1, mtime: 0, score: 0)
         }
@@ -18,7 +18,7 @@ final class PerformanceTests: XCTestCase {
         print("PERFORMANCE selection: 100 reads / 10,000 files = \(milliseconds) ms")
     }
     @MainActor func testSelectionCacheInvalidatesAndKeyboardRangeShrinks() {
-        let model = SearchModel()
+        let model = SearchModel(engine: RecordingSearchEngine())
         model.hits = (0..<6).map {
             Hit(path: "/fixture/file-\($0).txt", kind: "file", size: 1, mtime: 0, score: 0)
         }
@@ -43,7 +43,7 @@ final class PerformanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let original = a.appendingPathComponent("original.txt")
         try Data("original".utf8).write(to: original)
-        let model = SearchModel(); model.navigate(a)
+        let model = SearchModel(engine: RecordingSearchEngine()); model.navigate(a)
         for _ in 0..<100 {
             if !model.loading { break }; try await Task.sleep(for: .milliseconds(10))
         }
@@ -64,7 +64,7 @@ final class PerformanceTests: XCTestCase {
     }
 
     @MainActor func testNativeListRestoresRowsWithoutAutomaticHeightLayout() throws {
-        let model = SearchModel()
+        let model = SearchModel(engine: RecordingSearchEngine())
         model.hits = (0..<782).map {
             Hit(path: "/fixture/file-\($0).txt", kind: "file", size: 1, mtime: 0, score: 0)
         }

@@ -75,7 +75,7 @@ final class FileOperationsTests: XCTestCase {
     }
     @MainActor func testFailedUndoRemainsRecoverable() async throws {
         let a = try write("a.txt"), b = folder.appendingPathComponent("b.txt")
-        let model = SearchModel(); model.navigate(folder)
+        let model = SearchModel(engine: RecordingSearchEngine()); model.navigate(folder)
         model.perform([.move(a, b)], name: "Move")
         try await waitForOperation(model)
         _ = try write("a.txt", "conflict")
@@ -89,7 +89,7 @@ final class FileOperationsTests: XCTestCase {
     @MainActor func testTransferRejectsFolderInsideItself() async throws {
         let child = folder.appendingPathComponent("child")
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
-        let model = SearchModel(); model.navigate(folder)
+        let model = SearchModel(engine: RecordingSearchEngine()); model.navigate(folder)
         model.transfer([folder], to: child, move: true)
         XCTAssertFalse(model.busy); XCTAssertNotNil(model.error)
         XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path))
@@ -119,7 +119,7 @@ final class FileOperationsTests: XCTestCase {
                 CGPoint(x: 20, y: 100), bounds: [], mode: .columns))
     }
     @MainActor func testVirtualViewsClearSearchScope() {
-        let model = SearchModel(); model.scope = folder.path
+        let model = SearchModel(engine: RecordingSearchEngine()); model.scope = folder.path
         model.sidebar("recents")
         XCTAssertEqual(model.scope, ""); XCTAssertFalse(model.canWriteHere)
     }
@@ -153,7 +153,7 @@ final class FileOperationsTests: XCTestCase {
     }
 
     @MainActor func testSortedCacheTracksSortAndHiddenChanges() {
-        let model = SearchModel()
+        let model = SearchModel(engine: RecordingSearchEngine())
         model.hits = [
             Hit(path: "/b.txt", kind: "file", size: 2, mtime: 0, score: 0),
             Hit(path: "/a.txt", kind: "file", size: 1, mtime: 0, score: 0),
@@ -229,7 +229,9 @@ final class FileOperationsTests: XCTestCase {
 
 }
 
-private actor RecordingSearchEngine: SearchService {
+/// Records queries instead of starting a real engine, which would index the disk
+/// with the test runner's permissions.
+actor RecordingSearchEngine: SearchService {
     var queries: [String] = []
     func request(_ fields: [String: Any]) async throws -> Reply {
         queries.append(fields["q"] as? String ?? "")
