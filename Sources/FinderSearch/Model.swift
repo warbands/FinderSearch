@@ -59,7 +59,6 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
     @Published var error: String?
     @Published var ready = false
     @Published var entries = 0
-    @Published var fullDiskAccess = false
     @Published var elapsed: Double = 0
     @Published var preview: Hit?
     @Published var viewMode =
@@ -334,14 +333,13 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
     func monitor() async {
         guard !statusStarted else { return }; statusStarted = true
         while !Task.isCancelled {
+            DiskAccess.shared.refresh()
             do {
                 let status = try await engine.request(["op": "status"])
                 let becameReady = status.ok && !ready; if ready != status.ok { ready = status.ok }
                 if status.ok {
                     if entries != status.entries ?? 0 { entries = status.entries ?? 0 };
-                    if fullDiskAccess != status.full_disk_access ?? false {
-                        fullDiskAccess = status.full_disk_access ?? false
-                    }; if becameReady && (isSearch || route == "recents") { schedule() }
+                    if becameReady && (isSearch || route == "recents") { schedule() }
                 }
             } catch { if isSearch { self.error = error.localizedDescription } }
             try? await Task.sleep(for: .seconds(5))
@@ -534,6 +532,25 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
         watchTask?.cancel(); task?.cancel(); watchRefresh?.cancel(); watcher?.cancel();
         metadata?.stop();
         if let metadataObserver { NotificationCenter.default.removeObserver(metadataObserver) }
+    }
+}
+
+/// Full Disk Access as the windows see it, and whether to offer setting it up.
+@MainActor final class DiskAccess: ObservableObject {
+    static let shared = DiskAccess()
+    @Published private(set) var granted = FullDiskAccess.isGranted()
+    /// "Not Now" on the setup sheet; the sidebar's button offers it again.
+    @Published var later = UserDefaults.standard.bool(forKey: "fullDiskAccessLater") {
+        didSet { UserDefaults.standard.set(later, forKey: "fullDiskAccessLater") }
+    }
+    /// Check again. When access changes, restart the engine so it applies:
+    /// just granted, the new engine scans the folders the old one skipped.
+    func refresh() {
+        let now = FullDiskAccess.isGranted()
+        guard now != granted else { return }
+        granted = now
+        FileIcons.shared.setFullDiskAccess(now)
+        Engine.shared.restart()
     }
 }
 

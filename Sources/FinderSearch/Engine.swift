@@ -200,6 +200,9 @@ final class Engine: SearchService, @unchecked Sendable {
             if id != 0 { finish(id, .failure(CancellationError())) }
         }
     }
+    /// Stop the engine; the next request starts a new one, which sees
+    /// permissions granted since and scans the folders the old one skipped.
+    func restart() { queue.async { self.reset() } }
     /// Delete the index and its key. The next request starts a fresh engine,
     /// which rebuilds the index under a new key.
     func forget() async throws {

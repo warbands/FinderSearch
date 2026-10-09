@@ -113,9 +113,41 @@ enum LocalFiles {
     }
 }
 
+/// Full Disk Access, checked live. The system's privacy database opens only
+/// with it; trying reads nothing and never prompts.
+enum FullDiskAccess {
+    static func isGranted() -> Bool {
+        let handle = FileHandle(forReadingAtPath: "/Library/Application Support/com.apple.TCC/TCC.db")
+        try? handle?.close()
+        return handle != nil
+    }
+}
+
+/// Places macOS guards with a consent prompt: the ones fsearch skips without
+/// Full Disk Access (its `gated`), plus other apps' data, other volumes and
+/// photo libraries. Looking inside one, even just to draw its icon, makes
+/// macOS ask.
+enum ProtectedPlace {
+    static func contains(_ path: String) -> Bool {
+        let home = NSHomeDirectory()
+        let named = ["Desktop", "Documents", "Downloads", "Library/Mobile Documents", "Library/CloudStorage"]
+        if named.contains(where: { path == home + "/" + $0 }) { return true }
+        let parent = (path as NSString).deletingLastPathComponent
+        return parent == "/Volumes" || parent == home + "/Library/Containers"
+            || parent == home + "/Library/Group Containers" || path.hasSuffix(".photoslibrary")
+    }
+}
+
 final class FileIcons: @unchecked Sendable {
     static let shared = FileIcons()
     private let cache = NSCache<NSString, NSImage>()
+    private let lock = NSLock()
+    private var fullDiskAccess = FullDiskAccess.isGranted()
+    /// Called when Full Disk Access changes: protected places can show their own icons.
+    func setFullDiskAccess(_ granted: Bool) {
+        lock.lock(); let changed = fullDiskAccess != granted; fullDiskAccess = granted; lock.unlock()
+        if changed { cache.removeAllObjects() }
+    }
     private let queue: OperationQueue = {
         let queue = OperationQueue(); queue.name = "FinderSearch.icons";
         queue.qualityOfService = .utility; queue.maxConcurrentOperationCount = 4; return queue
@@ -128,8 +160,9 @@ final class FileIcons: @unchecked Sendable {
     }
     func placeholder(_ hit: Hit) -> NSImage {
         let type =
-            hit.kind == "dir"
-            ? UTType.folder : UTType(filenameExtension: hit.url.pathExtension) ?? .data
+            hit.isFolder
+            ? UTType.folder
+            : UTType(filenameExtension: hit.url.pathExtension) ?? (hit.kind == "dir" ? .folder : .data)
         let key = "type:" + type.identifier
         if let image = cache.object(forKey: key as NSString) { return image }
         let image = NSWorkspace.shared.icon(for: type)
@@ -137,6 +170,11 @@ final class FileIcons: @unchecked Sendable {
         return image
     }
     func icon(_ hit: Hit) -> NSImage {
+        lock.lock(); let mayLookInside = fullDiskAccess; lock.unlock()
+        // A folder's own icon means macOS looking inside it for a custom one.
+        if hit.kind == "dir" && !mayLookInside && ProtectedPlace.contains(hit.path) {
+            return placeholder(hit)
+        }
         let key = (hit.path + ":" + String(hit.mtime)) as NSString
         if let image = cache.object(forKey: key) { return image }
         let image = NSWorkspace.shared.icon(forFile: hit.path)

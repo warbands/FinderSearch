@@ -115,15 +115,59 @@ import UniformTypeIdentifiers
 extension Notification.Name { static let focusSearch = Notification.Name("focusSearch") }
 struct BrowserRoot: View {
     @StateObject private var workspace = BrowserWorkspace()
+    @ObservedObject private var access = DiskAccess.shared
     var body: some View {
         BrowserView(workspace: workspace, model: workspace.current).id(workspace.selectedTab)
             .focusedSceneObject(workspace).focusedSceneObject(workspace.current)
+            .sheet(
+                isPresented: Binding(
+                    get: { !access.granted && !access.later },
+                    set: { if !$0 && !access.granted { access.later = true } })
+            ) { FullDiskAccessSetup(access: access) }
+    }
+}
+
+/// Asks for Full Disk Access the only way macOS allows: the user turns it on
+/// in System Settings. Closes by itself once it's on.
+struct FullDiskAccessSetup: View {
+    @ObservedObject var access: DiskAccess
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 64, height: 64)
+            Text("Search everything on your Mac").font(.title2.bold())
+            Text(
+                "To find files in Desktop, Documents, Downloads, iCloud Drive and other drives, "
+                    + "FinderSearch needs Full Disk Access. Only you can turn it on, in System Settings."
+            ).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("1. Click **Open System Settings**.")
+                Text("2. Turn on **FinderSearch**. If it isn’t listed, click **+** and choose it in Applications.")
+                Text("3. Come back here. FinderSearch notices by itself.")
+            }.frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true)
+            Text("Your index never leaves this Mac and is stored encrypted.")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button("Not Now") { access.later = true }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Open System Settings") {
+                    NSWorkspace.shared.open(
+                        URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!)
+                }.keyboardShortcut(.defaultAction)
+            }
+        }.padding(28).frame(width: 460)
+            .task {
+                while !Task.isCancelled {
+                    access.refresh()
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
     }
 }
 
 struct BrowserView: View {
     @ObservedObject var workspace: BrowserWorkspace
     @ObservedObject var model: SearchModel
+    @ObservedObject private var access = DiskAccess.shared
     @FocusState private var filesFocused: Bool
     @FocusState private var searchFocused: Bool
     @State private var fileNavigationActive = false
@@ -184,14 +228,9 @@ struct BrowserView: View {
             }
             .listStyle(.sidebar).navigationSplitViewColumnWidth(min: 170, ideal: 208, max: 280)
             .safeAreaInset(edge: .bottom) {
-                if model.ready && !model.fullDiskAccess {
-                    Button("Enable Full Disk Access…") {
-                        NSWorkspace.shared.open(
-                            URL(
-                                string:
-                                    "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"
-                            )!)
-                    }.font(.caption).padding(12)
+                if !access.granted {
+                    Button("Enable Full Disk Access…") { access.later = false }
+                        .font(.caption).padding(12)
                 }
             }
         } detail: {
