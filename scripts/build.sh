@@ -42,7 +42,9 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-codesign --force --sign - "$app/Contents/Helpers/fsearch"
-codesign --force --sign - "$app"
+# Hardened runtime: no injected code (DYLD_INSERT_LIBRARIES) borrowing the
+# app's Full Disk Access.
+codesign --force --sign - --options runtime "$app/Contents/Helpers/fsearch"
+codesign --force --sign - --options runtime "$app"
 codesign --verify --deep --strict "$app"
 printf 'Built %s\n' "$app"

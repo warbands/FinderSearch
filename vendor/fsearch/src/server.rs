@@ -38,6 +38,40 @@ pub fn serve(dir: PathBuf, home: String) {
     }
 }
 
+/// An engine private to the process that spawned us, over our stdin/stdout.
+/// No socket: only the parent holding the pipes can query it, so nothing else
+/// can borrow the Full Disk Access it inherits. Each request runs on its own
+/// thread, so an abandoned one doesn't hold up the next; the reply carries
+/// the request's `id`. Exits when the parent closes stdin.
+pub fn app(dir: PathBuf, home: String) {
+    // stderr is the engine's log, as for the daemon.
+    if let Ok(log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("daemon.log")) {
+        unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&log), 2) };
+    }
+    let engine = match Engine::start(Options { dir, home, skip: None }) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("{} {e}", fsearch::query::now_secs());
+            return;
+        }
+    };
+    let out = std::sync::Arc::new(std::sync::Mutex::new(std::io::stdout()));
+    for line in std::io::stdin().lock().lines() {
+        let Ok(line) = line else { return };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (e, out) = (engine.clone(), out.clone());
+        std::thread::spawn(move || {
+            let resp = respond(&line, &e);
+            let mut w = out.lock().unwrap();
+            if writeln!(w, "{resp}").and_then(|_| w.flush()).is_err() {
+                std::process::exit(0);
+            }
+        });
+    }
+}
+
 fn handle(conn: UnixStream, engine: &Engine) {
     let Ok(r) = conn.try_clone() else { return };
     let mut w = std::io::BufWriter::new(conn);

@@ -54,6 +54,7 @@ static GLOBAL: Alloc = Alloc;
 const USAGE: &str = "usage:
   fsearch <query...> [--json]   search (starts the daemon if needed)
   fsearch stdio                 JSON lines on stdin/stdout
+  fsearch app                   JSON lines on stdin/stdout, to a private engine (no daemon)
   fsearch serve                 run the daemon in the foreground
   fsearch status
   fsearch install [--login]      copy to ~/.local/bin; --login also starts the daemon at login
@@ -87,6 +88,7 @@ fn main() {
         None | Some("-h" | "--help") => eprintln!("{USAGE}"),
         Some("serve") => server::serve(data_dir(), home()),
         Some("stdio") => stdio(),
+        Some("app") => server::app(data_dir(), home()),
         Some("status") => print_one(&serde_json::json!({"op": "status"}), true),
         Some("bench") => bench(&args[1..].join(" ")),
         Some("install") => install(args.iter().any(|a| a == "--login")),

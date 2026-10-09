@@ -43,8 +43,9 @@ If the helper does not inherit the grant, add `FinderSearch.app/Contents/Helpers
 as well. Permissions may need refreshing after a rebuild.
 
 The first launch builds an index; searches become available as indexing progresses.
-The engine keeps its index in `~/Library/Application Support/FSearch`, and its daemon
-can remain running after the UI closes. The app does not install a login item.
+The engine keeps its index in `~/Library/Application Support/FSearch`. It runs inside
+the app's helper process and quits with the app; it opens no socket, so no other
+process can query it or borrow its Full Disk Access. The app does not install a login item.
 Searches and file data stay on the Mac; the app does not upload them.
 
 All fsearch installations for the current user share the index directory. If a fresh
@@ -102,8 +103,8 @@ budget (a single larger view remains available).
 List view uses reusable, fixed-height AppKit rows. Icons load on a background queue
 with bounded concurrency and caching; gallery thumbnails load lazily and are cached.
 Folder-event bursts are coalesced, and obsolete enumeration is cancelled cooperatively.
-Engine cancellation releases the stdio client; it does not interrupt daemon computation
-or a blocked filesystem call. Cold folders and slow volumes can still take time.
+Engine cancellation abandons the request (its late reply is discarded); it does not
+interrupt engine computation or a blocked filesystem call. Cold folders and slow volumes can still take time.
 
 ## Validation and contributions
 
@@ -112,7 +113,8 @@ swift test -c release
 python3 scripts/verify_engine.py
 ```
 
-Engine checks require a running app/daemon and an indexed home folder; they create
+Engine checks require a running `fsearch serve` daemon (the app no longer runs one)
+and an indexed home folder; they create
 and remove isolated fixtures. Swift tests cover file-operation safety, undo,
 selection, debounce/cancellation, cached navigation, and native table restoration.
 Performance budgets measure model/table update work, not universal frame rate or
