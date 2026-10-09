@@ -422,8 +422,17 @@ const GATED_IN_HOME: &[&str] = &[
 ];
 
 /// Folders macOS guards with a consent prompt (or that hold other volumes).
+/// Not just in `home`: a home folder under /Users the account no longer uses
+/// (say $HOME moved to another volume) keeps its guarded folders, and the
+/// scan of / reaches them.
 pub fn gated(home: &str) -> Vec<Vec<u8>> {
-    GATED_IN_HOME.iter().map(|d| format!("{home}/{d}").into_bytes()).chain([b"/Volumes".to_vec()]).collect()
+    let users = std::fs::read_dir("/Users").into_iter().flatten().flatten().map(|e| e.path().to_string_lossy().into_owned());
+    let homes: Vec<String> = std::iter::once(home.to_string()).chain(users.filter(|h| h != home)).collect();
+    homes
+        .iter()
+        .flat_map(|h| GATED_IN_HOME.iter().map(move |d| format!("{h}/{d}").into_bytes()))
+        .chain([b"/Volumes".to_vec()])
+        .collect()
 }
 
 /// The system TCC database is readable only with Full Disk Access, and

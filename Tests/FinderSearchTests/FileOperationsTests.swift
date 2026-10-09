@@ -182,6 +182,21 @@ final class FileOperationsTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 1)
     }
 
+    func testProtectedPlacesCoverEveryHome() {
+        let home = NSHomeDirectory()
+        for path in [
+            home + "/Downloads", home + "/Library/Mobile Documents",
+            "/Users/someone/Desktop", "/Users/someone/Library/Containers/com.example.app",
+            "/Volumes/Backup", home + "/Pictures/Photos Library.photoslibrary",
+        ] {
+            XCTAssertTrue(ProtectedPlace.contains(path), path)
+        }
+        // Inside a protected place is only on screen once it has been opened.
+        for path in [home + "/Dev", "/Users/someone/Downloads/file.zip", "/Applications/Safari.app"] {
+            XCTAssertFalse(ProtectedPlace.contains(path), path)
+        }
+    }
+
     /// A stand-in engine: reads two requests, answers each with its own query as
     /// `error`, in reverse order or as read.
     func fakeEngine(reversed: Bool) throws -> Engine {

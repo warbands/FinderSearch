@@ -126,15 +126,20 @@ enum FullDiskAccess {
 /// Places macOS guards with a consent prompt: the ones fsearch skips without
 /// Full Disk Access (its `gated`), plus other apps' data, other volumes and
 /// photo libraries. Looking inside one, even just to draw its icon, makes
-/// macOS ask.
+/// macOS ask. That holds in any home folder under /Users, including one the
+/// account no longer uses, not only in the current one.
 enum ProtectedPlace {
     static func contains(_ path: String) -> Bool {
-        let home = NSHomeDirectory()
+        let parts = path.split(separator: "/")
+        var homes = [NSHomeDirectory()]
+        if parts.count > 1 && parts[0] == "Users" { homes.append("/Users/" + parts[1]) }
         let named = ["Desktop", "Documents", "Downloads", "Library/Mobile Documents", "Library/CloudStorage"]
-        if named.contains(where: { path == home + "/" + $0 }) { return true }
         let parent = (path as NSString).deletingLastPathComponent
-        return parent == "/Volumes" || parent == home + "/Library/Containers"
-            || parent == home + "/Library/Group Containers" || path.hasSuffix(".photoslibrary")
+        return parent == "/Volumes" || path.hasSuffix(".photoslibrary")
+            || homes.contains { home in
+                named.contains { path == home + "/" + $0 }
+                    || parent == home + "/Library/Containers" || parent == home + "/Library/Group Containers"
+            }
     }
 }
 
