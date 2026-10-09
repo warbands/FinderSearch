@@ -9,6 +9,7 @@ mod fsevents;
 pub mod index;
 pub mod live;
 pub mod query;
+pub mod seal;
 pub mod walk;
 
 pub use content::{FileMatches, Grep, GrepResult};

@@ -10,7 +10,13 @@ FinderSearch's filename search is powered by **fsearch**, created by **Noah Dunn
 
 - `src/server.rs`, `src/main.rs`: an `fsearch app` mode that runs the engine
   privately inside the app's helper process, answering on its stdin/stdout,
-  with no socket, and exiting with the app.
+  with no socket, and exiting with the app. Its first line gives the index
+  folder and encryption key.
+- `src/seal.rs` (new), with calls from `src/index.rs`, `src/content.rs` and
+  `src/engine.rs`: encryption at rest. With a key, the name index, content
+  segments and skipped-folder list are sealed with AES-256-GCM; without one,
+  files are written as upstream writes them. This adds the RustCrypto
+  `aes-gcm` crate and its dependencies, all MIT OR Apache-2.0, to `Cargo.lock`.
 
 Its copyright and license notice are included in every built app at
 `Contents/Resources/fsearch-LICENSE`. `vendor/fsearch/Cargo.lock` records its Rust

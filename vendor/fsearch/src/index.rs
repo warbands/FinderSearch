@@ -10,6 +10,7 @@
 //! is stored once with its char mask, and queries score unique names, not
 //! entries.
 
+use crate::seal;
 use crate::walk::{KIND_DIR, Listing, NONE};
 use memmap2::{Mmap, MmapMut};
 use rayon::prelude::*;
@@ -372,26 +373,24 @@ impl Index {
     }
 
     /// Write atomically (tmp + rename), stamping the current event id.
+    /// Sealed when `seal` has a key.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let tmp = path.with_extension("tmp");
-        let mut f = std::fs::File::create(&tmp)?;
+        let mut f = seal::Writer::create(&tmp, &seal::name(path), self.map.len())?;
         f.write_all(&header(MAGIC, &[self.n as u64, self.d as u64, self.u as u64, self.names_len as u64, self.event_id, self.synced_at as u64]))?;
         f.write_all(&self.map[HDR..])?;
-        f.sync_data()?;
+        f.finish()?.sync_data()?;
         std::fs::rename(tmp, path)
     }
 
     /// The event id a saved index is current as of, from its header alone.
     pub fn saved_event_id(path: &Path) -> Option<u64> {
-        use std::io::Read;
-        let mut h = [0u8; 56];
-        std::fs::File::open(path).ok()?.read_exact(&mut h).ok()?;
+        let h = seal::read_prefix(path, &seal::name(path), 56)?;
         fields::<6>(&h, MAGIC).map(|f| f[4])
     }
 
     pub fn load(path: &Path) -> Option<Index> {
-        let f = std::fs::File::open(path).ok()?;
-        Index::from_map(unsafe { Mmap::map(&f) }.ok()?)
+        Index::from_map(seal::open(path, &seal::name(path))?)
     }
 
     pub fn bytes(&self) -> usize {

@@ -46,9 +46,22 @@ pub fn serve(dir: PathBuf, home: String) {
 /// can borrow the Full Disk Access it inherits. Each request runs on its own
 /// thread, so an abandoned one doesn't hold up the next; the reply carries
 /// the request's `id`. Exits when the parent closes stdin.
-pub fn app(dir: PathBuf, home: String) {
+///
+/// The first line sets it up: `{"dir": <index folder>, "key": <64 hex digits>}`.
+/// With the key, the index files are sealed at rest (see `fsearch::seal`).
+pub fn app(home: String) {
+    let mut setup = String::new();
+    let _ = std::io::stdin().read_line(&mut setup);
+    let v: Value = serde_json::from_str(&setup).unwrap_or_default();
+    let (Some(dir), Some(key)) = (v["dir"].as_str(), v["key"].as_str().and_then(parse_key)) else {
+        eprintln!("fsearch app: the first line must give the index folder and key");
+        std::process::exit(2);
+    };
+    fsearch::seal::set_key(&key);
+    let dir = PathBuf::from(dir);
+    std::fs::create_dir_all(&dir).ok();
     // stderr is the engine's log, as for the daemon.
-    if let Ok(log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("daemon.log")) {
+    if let Ok(log) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("engine.log")) {
         unsafe { libc::dup2(std::os::fd::AsRawFd::as_raw_fd(&log), 2) };
     }
     let engine = match Engine::start(Options { dir, home, skip: None }) {
@@ -73,6 +86,18 @@ pub fn app(dir: PathBuf, home: String) {
             }
         });
     }
+}
+
+fn parse_key(hex: &str) -> Option<[u8; 32]> {
+    let b = hex.as_bytes();
+    let mut key = [0u8; 32];
+    if b.len() != 64 || !b.iter().all(u8::is_ascii_hexdigit) {
+        return None;
+    }
+    for (k, pair) in key.iter_mut().zip(b.chunks_exact(2)) {
+        *k = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(key)
 }
 
 fn try_lock(f: &std::fs::File) -> bool {

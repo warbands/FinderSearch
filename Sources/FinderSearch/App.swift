@@ -15,6 +15,9 @@ import UniformTypeIdentifiers
         }
         .defaultSize(width: 1050, height: 680).windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(after: .appSettings) {
+                Button("Forget Search Data…") { forgetSearchData() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("New Window") { openWindow(id: "browser") }.keyboardShortcut("n")
                 Button("New Tab") { workspace?.newTab() }.keyboardShortcut("t")
@@ -86,6 +89,19 @@ import UniformTypeIdentifiers
                     NotificationCenter.default.post(name: .focusSearch, object: nil)
                 }.keyboardShortcut("f")
             }
+        }
+    }
+    /// Delete the index and its key, after asking; the engine then builds a new one.
+    private func forgetSearchData() {
+        let alert = NSAlert()
+        alert.messageText = "Forget search data?"
+        alert.informativeText =
+            "FinderSearch deletes its index of your files and the key that protects it, "
+            + "then builds a new index. Your files aren’t touched."
+        alert.addButton(withTitle: "Forget"); alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        Task {
+            do { try await Engine.shared.forget() } catch { NSAlert(error: error).runModal() }
         }
     }
     private func textOrFile(_ selector: String, action: () -> Void) {

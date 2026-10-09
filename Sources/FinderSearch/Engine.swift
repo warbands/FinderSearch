@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import Security
 
 struct Hit: Decodable, Identifiable, Hashable {
     var id: String { path }
@@ -28,6 +29,57 @@ protocol SearchService: Sendable {
     func request(_ fields: [String: Any]) async throws -> Reply
 }
 
+/// Where the app's index lives, and the key it's sealed with on disk. The index
+/// is a cache of what's on disk, so losing the key only costs a rebuild.
+enum IndexStore {
+    /// In Caches: rebuildable, so Time Machine skips it.
+    static var folder: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("FinderSearch", isDirectory: true)
+    }
+    private static let item: [String: Any] = [
+        kSecClass as String: kSecClassGenericPassword,
+        kSecAttrService as String: "FinderSearch",
+        kSecAttrAccount as String: "index-key",
+    ]
+    /// The engine's first line: its index folder and key.
+    static func setup() throws -> [String: Any] {
+        try FileManager.default.createDirectory(
+            at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        var url = folder, values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try url.setResourceValues(values)
+        return ["dir": folder.path, "key": key().map { String(format: "%02x", $0) }.joined()]
+    }
+    /// The key from the Keychain, made and stored on first use. If the Keychain
+    /// refuses (access denied), a key for this session only: the index is rebuilt.
+    static func key() -> Data {
+        var query = item
+        query[kSecReturnData as String] = true
+        var found: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &found)
+        if status == errSecSuccess, let key = found as? Data, key.count == 32 { return key }
+        var key = Data(count: 32)
+        let made = key.withUnsafeMutableBytes { SecRandomCopyBytes(kSecRandomDefault, 32, $0.baseAddress!) }
+        precondition(made == errSecSuccess, "no random bytes for the index key")
+        if status == errSecSuccess || status == errSecItemNotFound {
+            SecItemDelete(item as CFDictionary)
+            var add = item
+            add[kSecValueData as String] = key
+            add[kSecAttrLabel as String] = "FinderSearch index key"
+            SecItemAdd(add as CFDictionary, nil)
+        }
+        return key
+    }
+    /// Delete the index and its key.
+    static func forget() throws {
+        SecItemDelete(item as CFDictionary)
+        if FileManager.default.fileExists(atPath: folder.path) {
+            try FileManager.default.removeItem(at: folder)
+        }
+    }
+}
+
 /// The app's one private engine, in a helper process reached only through its
 /// pipes (no socket another process could use), shared by every tab and window.
 /// Requests carry an id so several can be in flight; a reader thread hands each
@@ -37,8 +89,12 @@ final class Engine: SearchService, @unchecked Sendable {
     /// Spawning and writing stay on this serial queue.
     private let queue = DispatchQueue(label: "FinderSearch.engine", qos: .userInitiated)
     private let binaryOverride: String?
-    init(binary: String? = nil) {
+    private let setup: (() throws -> [String: Any])?
+    /// `setup` gives a new engine its index folder and key; nil sends nothing
+    /// (for stand-in engines in tests).
+    init(binary: String? = nil, setup: (() throws -> [String: Any])? = IndexStore.setup) {
         binaryOverride = binary
+        self.setup = setup
         signal(SIGPIPE, SIG_IGN)  // a dead helper fails the write instead of killing the app
     }
     private var process: Process?
@@ -63,7 +119,6 @@ final class Engine: SearchService, @unchecked Sendable {
         let candidates = [
             binaryOverride ?? "", bundled,
             ProcessInfo.processInfo.environment["FSEARCH_BINARY"] ?? "",
-            NSHomeDirectory() + "/.local/bin/fsearch",
             FileManager.default.currentDirectoryPath + "/vendor/fsearch/target/release/fsearch",
         ]
         guard
@@ -73,12 +128,14 @@ final class Engine: SearchService, @unchecked Sendable {
         else {
             throw Failure.message("Search engine missing. Run scripts/build.sh to bundle fsearch.")
         }
+        let first = try setup.map { try JSONSerialization.data(withJSONObject: $0()) + Data([10]) }
         let p = Process(), stdin = Pipe(), stdout = Pipe()
         p.executableURL = URL(fileURLWithPath: binary)
         p.arguments = ["app"]
         p.standardInput = stdin; p.standardOutput = stdout; p.standardError = FileHandle.nullDevice
         try p.run()
         process = p; input = stdin.fileHandleForWriting
+        if let first { try input?.write(contentsOf: first) }
         let output = stdout.fileHandleForReading
         let reader = Thread { [weak self] in self?.read(output, from: p) }
         reader.qualityOfService = .userInitiated  // decodes every reply; keep it off efficiency cores
@@ -141,6 +198,18 @@ final class Engine: SearchService, @unchecked Sendable {
         } onCancel: {
             lock.lock(); ticket.cancelled = true; let id = ticket.id; lock.unlock()
             if id != 0 { finish(id, .failure(CancellationError())) }
+        }
+    }
+    /// Delete the index and its key. The next request starts a fresh engine,
+    /// which rebuilds the index under a new key.
+    func forget() async throws {
+        try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
+            queue.async {
+                let p = self.process
+                self.reset()
+                p?.waitUntilExit()  // so it can't write into the folder as it goes
+                done.resume(with: Result { try IndexStore.forget() })
+            }
         }
     }
     deinit { process?.terminate() }

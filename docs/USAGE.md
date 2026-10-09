@@ -12,7 +12,7 @@ It is an early prototype, with incomplete Finder parity and no OS-shell replacem
 - macOS 15 or newer.
 - Xcode 16 or newer, or compatible Command Line Tools with the macOS 15 SDK.
 - Rust/Cargo with support for Rust edition 2024 (Rust 1.85 or newer).
-- Python 3 only for optional engine verification and index maintenance.
+- Python 3 only for optional engine verification and benchmarks.
 
 The build produces an app for the host architecture. The current locally verified
 build is Apple Silicon; Intel and clean second-Mac installation have not been verified.
@@ -43,22 +43,29 @@ If the helper does not inherit the grant, add `FinderSearch.app/Contents/Helpers
 as well. Permissions may need refreshing after a rebuild.
 
 The first launch builds an index; searches become available as indexing progresses.
-The engine keeps its index in `~/Library/Application Support/FSearch`. It runs inside
-the app's helper process and quits with the app; it opens no socket, so no other
-process can query it or borrow its Full Disk Access. The app does not install a login item.
-Searches and file data stay on the Mac; the app does not upload them.
+Granting Full Disk Access later is picked up on the next launch: the folders that were
+skipped are scanned then.
 
-All fsearch installations for the current user share the index directory. If a fresh
-crawl is necessary after changing permissions, quit FinderSearch and other fsearch
-installations, then run:
+## Your search data
 
-```sh
-python3 scripts/reindex.py
-```
+The index lists the names of your files and, for text files, what they contain. FinderSearch
+protects it without anything to set up:
 
-The script stops this project's daemon and moves the old index to a timestamped
-backup before the next launch. It refuses to proceed when it detects a running app
-or a daemon from another installation. It does not delete the backup.
+- **Encrypted on disk.** The index lives in `~/Library/Caches/FinderSearch` (readable only
+  by you, and skipped by Time Machine) and is encrypted with AES-256-GCM. The key is made on
+  first launch and kept in your login Keychain as "FinderSearch index key". Other apps can't
+  read the index, and a damaged or altered index is rebuilt rather than trusted.
+- **Private engine.** The search engine runs inside the app's own helper process and quits
+  with the app. It opens no socket, so no other process can query it or borrow its Full
+  Disk Access. The app does not install a login item.
+- **Stays on your Mac.** Searches and file data are never uploaded.
+
+**FinderSearch → Forget Search Data…** deletes the index and its key; a new index is built
+straight away. Nothing is lost: the index only describes files that are still on disk.
+
+While the app is open, the decrypted index is held in memory: about 150 MB for
+1.9 million files, growing with the number of files you have. If the Keychain denies access to the key, the app
+uses a key for that session only and rebuilds the index.
 
 Protected folders, network volumes, unmounted drives, and cloud providers still
 obey macOS permissions and availability. Thumbnails skip undownloaded cloud files;

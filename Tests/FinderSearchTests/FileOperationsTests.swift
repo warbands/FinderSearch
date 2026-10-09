@@ -171,7 +171,7 @@ final class FileOperationsTests: XCTestCase {
     func testStalledEngineCancelsWithoutWaitingForTimeout() async throws {
         let binary = try write("stalled-engine", "#!/bin/sh\nexec /bin/sleep 30\n")
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
-        let engine = Engine(binary: binary.path)
+        let engine = Engine(binary: binary.path, setup: nil)
         let request = Task { try await engine.request(["q": "test"]) }
         try await Task.sleep(for: .milliseconds(200))
         let start = Date()
@@ -190,7 +190,7 @@ final class FileOperationsTests: XCTestCase {
             + (reversed ? "reply \"$b\"; reply \"$a\"\n" : "reply \"$a\"; reply \"$b\"\n") + "exec /bin/sleep 5\n"
         let binary = try write("fake-engine", script)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
-        return Engine(binary: binary.path)
+        return Engine(binary: binary.path, setup: nil)
     }
 
     func testConcurrentRequestsGetTheirOwnReplies() async throws {

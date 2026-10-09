@@ -7,6 +7,7 @@ use crate::fsevents::{self, HISTORY_DONE, KERNEL_DROPPED, MUST_SCAN_SUBDIRS, USE
 use crate::index::Index;
 use crate::live::{Applied, Live};
 use crate::query::{Query, Searcher};
+use crate::seal;
 use crate::walk;
 use std::collections::HashMap;
 use std::os::unix::ffi::OsStrExt;
@@ -370,7 +371,7 @@ fn note_skipped(dir: &Path) {
         out.extend_from_slice(p);
         out.push(b'\n');
     }
-    if let Err(e) = std::fs::write(dir.join(SKIPPED), out) {
+    if let Err(e) = seal::write(&dir.join(SKIPPED), SKIPPED, &out) {
         log(format!("save failed: {e}"));
     }
 }
@@ -380,9 +381,9 @@ fn note_skipped(dir: &Path) {
 /// must-scan-subdirs event would; ones still refused carry over to the next
 /// save. (A save from before this was recorded rescans the gated folders.)
 fn rescan_unskipped(shared: &Shared) {
-    let was: Vec<Vec<u8>> = match std::fs::read(shared.dir.join(SKIPPED)) {
-        Ok(b) => b.split(|&c| c == b'\n').filter(|l| !l.is_empty()).map(<[u8]>::to_vec).collect(),
-        Err(_) => gated(&shared.home),
+    let was: Vec<Vec<u8>> = match seal::read(&shared.dir.join(SKIPPED), SKIPPED) {
+        Some(b) => b.split(|&c| c == b'\n').filter(|l| !l.is_empty()).map(<[u8]>::to_vec).collect(),
+        None => gated(&shared.home),
     };
     let mut now = Vec::new();
     for path in was {

@@ -15,6 +15,7 @@
 use crate::index::{HDR, as_bytes, fields, header, layout, sec};
 use crate::live::{Live, join};
 use crate::query::{GrepMode, Query, fold};
+use crate::seal;
 use crate::walk::KIND_FILE;
 use memmap2::Mmap;
 use rayon::prelude::*;
@@ -201,8 +202,8 @@ impl Segment {
     }
 
     fn load(dir: &Path, id: u64) -> Option<Segment> {
-        let f = std::fs::File::open(seg_path(dir, id)).ok()?;
-        let map = unsafe { Mmap::map(&f) }.ok()?;
+        let p = seg_path(dir, id);
+        let map = seal::open(&p, &seal::name(&p))?;
         let [ndocs, ntri, plen, paths_len] = fields(&map, MAGIC)?.map(|v| v as usize);
         let (off, total) = layout(&lens(ndocs, ntri, plen, paths_len));
         if map.len() < total {
@@ -603,8 +604,10 @@ fn write_segment(dir: &Path, id: u64, docs: &[DocMeta<'_>], mut next: impl FnMut
     ];
     let p = seg_path(dir, id);
     let tmp = p.with_extension("tmp");
+    let total = (off[NS - 1] + sections[NS - 1].len() + 63) & !63;
     let write = || -> std::io::Result<()> {
-        let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+        // Sealed when `seal` has a key.
+        let mut f = seal::Writer::create(&tmp, &seal::name(&p), total)?;
         f.write_all(&hdr)?;
         let mut at = HDR;
         for (k, sec) in sections.iter().enumerate() {
@@ -612,8 +615,8 @@ fn write_segment(dir: &Path, id: u64, docs: &[DocMeta<'_>], mut next: impl FnMut
             f.write_all(sec)?;
             at = off[k] + sec.len();
         }
-        f.write_all(&vec![0u8; ((at + 63) & !63) - at])?;
-        f.flush()
+        f.write_all(&vec![0u8; total - at])?;
+        f.finish().map(drop)
     };
     write().ok()?;
     std::fs::rename(&tmp, &p).ok()?;
