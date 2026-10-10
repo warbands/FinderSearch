@@ -427,7 +427,7 @@ struct BrowserView: View {
     @ViewBuilder private var fileContent: some View {
         if model.viewMode == .columns && model.canWriteHere {
             ColumnBrowser(model: model, focusFiles: { focusFiles() })
-        } else if (model.loading || model.searching) && model.sortedHits.isEmpty {
+        } else if (model.slowLoading || model.searching) && model.sortedHits.isEmpty {
             FolderLoadingSkeleton(mode: model.viewMode, iconSize: iconSize)
         } else if model.sortedHits.isEmpty && (model.isSearch || model.route == "recents") && !model.ready {
             ContentUnavailableView {
@@ -557,7 +557,7 @@ struct BrowserView: View {
                         ? "Indexing your Mac…"
                         : "Indexing file contents… \(model.contentPending.formatted()) to go")
                 Text("·")
-            } else if model.loading || model.searching || model.busy {
+            } else if model.slowLoading || model.searching || model.busy {
                 ProgressView().controlSize(.mini)
             }
             Text(

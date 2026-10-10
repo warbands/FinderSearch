@@ -226,6 +226,33 @@ final class FileOperationsTests: XCTestCase {
         XCTAssertEqual(fresh.error, "fresh")
     }
 
+    @MainActor func waitFor(_ done: @escaping () -> Bool) async throws {
+        var tries = 0
+        while !done() && tries < 300 { tries += 1; try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(done(), "timed out")
+    }
+
+    /// Entering a folder must not flash: the old listing stays, in its order,
+    /// until the new one replaces it; no empty frame, no loading placeholder.
+    @MainActor func testEnteringAFolderReplacesTheListingInPlace() async throws {
+        let inner = folder.appendingPathComponent("inner")
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: false)
+        _ = try write("b.txt"); _ = try write("a.txt")
+        try Data("x".utf8).write(to: inner.appendingPathComponent("only.txt"))
+        let model = SearchModel(engine: RecordingSearchEngine())
+        model.navigate(folder)
+        try await waitFor { !model.loading }
+        model.sort = .modified; model.ascending = false
+        let before = model.sortedHits.map(\.name)
+        XCTAssertEqual(Set(before), ["a.txt", "b.txt", "inner"])
+        model.navigate(inner)
+        XCTAssertEqual(model.sortedHits.map(\.name), before, "old listing changed before the new one arrived")
+        XCTAssertFalse(model.loading && model.sortedHits.isEmpty)
+        try await waitFor { !model.loading }
+        XCTAssertEqual(model.sortedHits.map(\.name), ["only.txt"])
+        XCTAssertFalse(model.loading && model.sortedHits.isEmpty)
+    }
+
     @MainActor func testSearchDebouncesToFinalQuery() async throws {
         let engine = RecordingSearchEngine()
         let model = SearchModel(engine: engine)

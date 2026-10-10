@@ -56,6 +56,10 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
     private var selectionAnchor: String?
     @Published var searching = false
     @Published var loading = false
+    /// A folder taking long enough to load (150 ms) that its old listing is
+    /// cleared and the loading placeholder shown. A quick one replaces the old
+    /// listing in place, so entering a folder doesn't flash.
+    @Published var slowLoading = false
     @Published var error: String?
     @Published var ready = false
     @Published var entries = 0
@@ -190,6 +194,7 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
     func start() { if hits.isEmpty { schedule() }; watch() }
     func navigate(_ url: URL, history: Bool = true) {
         guard !busy else { return }
+        let shown = sortedHits
         saveDefaultSnapshot()
         changingLocation = true
         if history && url != location { backStack.append(location); forwardStack = [] }
@@ -200,8 +205,10 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
             sort = snapshot.sort; ascending = snapshot.ascending
         }
         changingLocation = false
-        if snapshots[SnapshotKey(route: route, hidden: showHidden)] == nil { hits = [] }
         watch(); schedule()
+        // Until the new folder's listing replaces it, keep showing the old one
+        // exactly as it was: no empty frame, no re-sort.
+        if loading { sortedCache = shown }
         if let snapshot = snapshots[SnapshotKey(route: route, hidden: showHidden)] {
             selection = snapshot.selection
         }
@@ -239,7 +246,14 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
         let folder = location, hidden = showHidden, text = query, searchScope = scope,
             type = fileType
         let recent = route == "recents" && !isSearch
-        loading = !searchingNow && !cached; searching = searchingNow
+        loading = !searchingNow && !cached; searching = searchingNow; slowLoading = false
+        if loading {
+            Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard let self, self.generation == revision, self.loading else { return }
+                self.hits = []; self.slowLoading = true
+            }
+        }
         task = Task {
             do {
                 let result: [Hit]
@@ -279,12 +293,12 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
                     Set(
                         (sortedHits + extraHits.filter { showHidden || !$0.name.hasPrefix(".") })
                             .map(\.path)))
-                loading = false; searching = false
+                loading = false; searching = false; slowLoading = false
                 if !searchingNow { saveDefaultSnapshot() }
             } catch is CancellationError {} catch {
                 guard revision == generation else { return };
                 self.error = error.localizedDescription; hits = []; selection = []; loading = false;
-                searching = false
+                searching = false; slowLoading = false
             }
         }
     }
@@ -357,6 +371,8 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
         }; statusStarted = false
     }
     func open(_ item: Hit? = nil) {
+        // While a folder loads, the previous folder's rows may still be on screen.
+        guard !loading else { return }
         if let item {
             if item.isFolder {
                 navigate(item.url)
