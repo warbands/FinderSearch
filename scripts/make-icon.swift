@@ -210,55 +210,80 @@ let appIconDesigns: [String: AppIconDesign] = [
                       glass: [rgb(0x3E5D92, 0.9), rgb(0x1B2B4D, 0.9)])
         }),
     ]),
+    "C": AppIconDesign(fill: (0xFFFFFF, 0xE4E7EC), layers: [
+        ("magnifier", { ctx in
+            let page = CGRect(x: 230, y: 210, width: 520, height: 620), center = CGPoint(x: 560, y: 520)
+            magnifier(ctx, center, r: 175, ring: 44, handle: 220, ringColors: blue, handleColors: graphite,
+                      glass: [rgb(0xFFFFFF, 0.95), rgb(0xEEF4FF, 0.95)]) { ctx, _ in
+                textLines(ctx, page, scale: 1.6, color: rgb(0x2F6FE0), about: center)
+            }
+        }),
+        ("text", { ctx in textLines(ctx, CGRect(x: 230, y: 210, width: 520, height: 620), scale: 1, color: rgb(0xB9C0CA), about: .zero) }),
+    ]),
 ]
 /// Which design the app uses.
 let appIcon = appIconDesigns["A"]!
 
-let iconDir = root.appendingPathComponent("assets/AppIcon.icon")
-let layerDir = iconDir.appendingPathComponent("Assets")
-try? FileManager.default.removeItem(at: iconDir)
-try FileManager.default.createDirectory(at: layerDir, withIntermediateDirectories: true)
-// The designs were drawn in the 824 px body at (100, 100); a layer fills the whole square.
-for layer in appIcon.layers {
-    save(render(1024) { ctx in ctx.scaleBy(x: S / 824, y: S / 824); ctx.translateBy(x: -100, y: -100); layer.draw(ctx) },
-         layerDir.appendingPathComponent(layer.name + ".png"))
-}
 func srgb(_ hex: UInt32) -> String {
     let c = [hex >> 16 & 0xFF, hex >> 8 & 0xFF, hex & 0xFF].map { String(format: "%.5f", Double($0) / 255) }
     return "\"extended-srgb:\(c.joined(separator: ",")),1.00000\""
 }
-let groups = appIcon.layers.map { layer in
-    """
-        {
-          "layers" : [ { "image-name" : "\(layer.name).png", "name" : "\(layer.name)" } ],
-          "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
-        }
-    """
-}.joined(separator: ",\n")
-let iconJSON = """
-{
-  "fill" : {
-    "linear-gradient" : [ \(srgb(appIcon.fill.top)), \(srgb(appIcon.fill.bottom)) ]
-  },
-  "groups" : [
-\(groups)
-  ],
-  "supported-platforms" : {
-    "circles" : [ "watchOS" ],
-    "squares" : "shared"
-  }
-}
-"""
-try iconJSON.write(to: iconDir.appendingPathComponent("icon.json"), atomically: true, encoding: .utf8)
 
-let assets = root.appendingPathComponent("assets")
-let partial = FileManager.default.temporaryDirectory.appendingPathComponent("AppIcon-\(getpid())-partial.plist")
-defer { try? FileManager.default.removeItem(at: partial) }
-let actool = Process()
-actool.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-actool.arguments = ["actool", iconDir.path, "--compile", assets.path, "--platform", "macosx",
-                    "--minimum-deployment-target", "15.0", "--app-icon", "AppIcon",
-                    "--output-partial-info-plist", partial.path, "--errors", "--warnings"]
-try actool.run(); actool.waitUntilExit()
-guard actool.terminationStatus == 0 else { fatalError("actool failed (it needs Xcode, not just the command line tools)") }
-print("wrote", out.path, "and", assets.path)
+/// Write `design` as `dir`/AppIcon.icon and compile it there (Assets.car, AppIcon.icns).
+func compile(_ design: AppIconDesign, into dir: URL) throws {
+    let iconDir = dir.appendingPathComponent("AppIcon.icon")
+    let layerDir = iconDir.appendingPathComponent("Assets")
+    try? FileManager.default.removeItem(at: iconDir)
+    try FileManager.default.createDirectory(at: layerDir, withIntermediateDirectories: true)
+    // The designs were drawn in the 824 px body at (100, 100); a layer fills the whole square.
+    for layer in design.layers {
+        save(render(1024) { ctx in ctx.scaleBy(x: S / 824, y: S / 824); ctx.translateBy(x: -100, y: -100); layer.draw(ctx) },
+             layerDir.appendingPathComponent(layer.name + ".png"))
+    }
+    let groups = design.layers.map { layer in
+        """
+            {
+              "layers" : [ { "image-name" : "\(layer.name).png", "name" : "\(layer.name)" } ],
+              "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
+            }
+        """
+    }.joined(separator: ",\n")
+    let json = """
+    {
+      "fill" : {
+        "linear-gradient" : [ \(srgb(design.fill.top)), \(srgb(design.fill.bottom)) ]
+      },
+      "groups" : [
+    \(groups)
+      ],
+      "supported-platforms" : {
+        "circles" : [ "watchOS" ],
+        "squares" : "shared"
+      }
+    }
+    """
+    try json.write(to: iconDir.appendingPathComponent("icon.json"), atomically: true, encoding: .utf8)
+    let partial = FileManager.default.temporaryDirectory.appendingPathComponent("AppIcon-\(getpid())-partial.plist")
+    defer { try? FileManager.default.removeItem(at: partial) }
+    let actool = Process()
+    actool.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+    actool.arguments = ["actool", iconDir.path, "--compile", dir.path, "--platform", "macosx",
+                        "--minimum-deployment-target", "15.0", "--app-icon", "AppIcon",
+                        "--output-partial-info-plist", partial.path, "--errors", "--warnings"]
+    actool.standardOutput = FileHandle.nullDevice
+    try actool.run(); actool.waitUntilExit()
+    guard actool.terminationStatus == 0 else { fatalError("actool failed (it needs Xcode, not just the command line tools)") }
+}
+
+// `--check DIR`: compile every design into DIR/<name>/ to compare them, leaving the app's icon alone.
+if let i = CommandLine.arguments.firstIndex(of: "--check"), i + 1 < CommandLine.arguments.count {
+    let dir = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    for name in appIconDesigns.keys.sorted() {
+        try compile(appIconDesigns[name]!, into: dir.appendingPathComponent(name))
+    }
+    print("compiled", appIconDesigns.keys.sorted().joined(separator: ", "), "into", dir.path)
+} else {
+    let assets = root.appendingPathComponent("assets")
+    try compile(appIcon, into: assets)
+    print("wrote", out.path, "and", assets.path)
+}
