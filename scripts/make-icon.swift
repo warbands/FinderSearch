@@ -1,5 +1,5 @@
 // Draws FinderSearch's icon designs, all in code (no SF Symbols: their license
-// excludes app icons). B, "private search", is the app icon.
+// excludes app icons). `appIcon` below picks the one the app uses (now A).
 //
 // usage, from anywhere: swift scripts/make-icon.swift  (needs Xcode, for actool)
 // writes docs/images/icon-concepts/{A-folder,B-private,C-content,compare}.png,
@@ -185,42 +185,63 @@ for (row, bg, ink) in [(1, rgb(0xECECEC), NSColor.black), (0, rgb(0x1E1E1E), NSC
 }
 save(sheet.makeImage()!, out.appendingPathComponent("compare.png"))
 
-// The app icon: B as an Icon Composer icon (assets/AppIcon.icon), the format
-// current macOS expects; an older-style icon is set on a grey plate. A navy
-// fill and two layers, magnifier and padlock, drawn edge to edge: macOS adds
-// the rounded shape, shadows and glass. actool compiles it into
+// The app icon, as an Icon Composer icon (assets/AppIcon.icon), the format
+// current macOS expects; an older-style icon is set on a grey plate. A design
+// is a fill and layers drawn edge to edge, top first: macOS adds the rounded
+// shape, shadows, glass, and dark and tinted variants. actool compiles it into
 // assets/Assets.car and, for older macOS, assets/AppIcon.icns; the build
 // copies those, so it doesn't need actool.
-let iconDir = root.appendingPathComponent("assets/AppIcon.icon")
-let layers = iconDir.appendingPathComponent("Assets")
-try? FileManager.default.removeItem(at: iconDir)
-try FileManager.default.createDirectory(at: layers, withIntermediateDirectories: true)
-// B was drawn in the 824 px body at (100, 100); a layer fills the whole square.
-func layer(_ draw: @escaping (CGContext) -> Void) -> CGImage {
-    render(1024) { ctx in ctx.scaleBy(x: S / 824, y: S / 824); ctx.translateBy(x: -100, y: -100); draw(ctx) }
+struct AppIconDesign {
+    let fill: (top: UInt32, bottom: UInt32)
+    let layers: [(name: String, draw: (CGContext) -> Void)]
 }
-save(layer { ctx in
-    magnifier(ctx, CGPoint(x: 460, y: 560), r: 205, ring: 48, handle: 250, ringColors: silver, handleColors: silver,
-              glass: [rgb(0x3E5D92, 0.9), rgb(0x1B2B4D, 0.9)])
-}, layers.appendingPathComponent("magnifier.png"))
-save(layer { ctx in padlock(ctx, CGPoint(x: 460, y: 555), 165, rgb(0xFFFFFF)) }, layers.appendingPathComponent("padlock.png"))
+let appIconDesigns: [String: AppIconDesign] = [
+    "A": AppIconDesign(fill: (0xF3F8FE, 0xD5E6F8), layers: [
+        ("magnifier", { ctx in
+            magnifier(ctx, CGPoint(x: 600, y: 445), r: 150, ring: 42, handle: 210, ringColors: graphite, handleColors: graphite,
+                      glass: [rgb(0xFFFFFF, 0.55), rgb(0xD7ECFF, 0.25)])
+        }),
+        ("folder", { ctx in folder(ctx, CGRect(x: 205, y: 300, width: 560, height: 430)) }),
+    ]),
+    "B": AppIconDesign(fill: (0x24375E, 0x0E1730), layers: [
+        ("padlock", { ctx in padlock(ctx, CGPoint(x: 460, y: 555), 165, rgb(0xFFFFFF)) }),
+        ("magnifier", { ctx in
+            magnifier(ctx, CGPoint(x: 460, y: 560), r: 205, ring: 48, handle: 250, ringColors: silver, handleColors: silver,
+                      glass: [rgb(0x3E5D92, 0.9), rgb(0x1B2B4D, 0.9)])
+        }),
+    ]),
+]
+/// Which design the app uses.
+let appIcon = appIconDesigns["A"]!
+
+let iconDir = root.appendingPathComponent("assets/AppIcon.icon")
+let layerDir = iconDir.appendingPathComponent("Assets")
+try? FileManager.default.removeItem(at: iconDir)
+try FileManager.default.createDirectory(at: layerDir, withIntermediateDirectories: true)
+// The designs were drawn in the 824 px body at (100, 100); a layer fills the whole square.
+for layer in appIcon.layers {
+    save(render(1024) { ctx in ctx.scaleBy(x: S / 824, y: S / 824); ctx.translateBy(x: -100, y: -100); layer.draw(ctx) },
+         layerDir.appendingPathComponent(layer.name + ".png"))
+}
+func srgb(_ hex: UInt32) -> String {
+    let c = [hex >> 16 & 0xFF, hex >> 8 & 0xFF, hex & 0xFF].map { String(format: "%.5f", Double($0) / 255) }
+    return "\"extended-srgb:\(c.joined(separator: ",")),1.00000\""
+}
+let groups = appIcon.layers.map { layer in
+    """
+        {
+          "layers" : [ { "image-name" : "\(layer.name).png", "name" : "\(layer.name)" } ],
+          "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
+        }
+    """
+}.joined(separator: ",\n")
 let iconJSON = """
 {
   "fill" : {
-    "linear-gradient" : [
-      "extended-srgb:0.14118,0.21569,0.36863,1.00000",
-      "extended-srgb:0.05490,0.09020,0.18824,1.00000"
-    ]
+    "linear-gradient" : [ \(srgb(appIcon.fill.top)), \(srgb(appIcon.fill.bottom)) ]
   },
   "groups" : [
-    {
-      "layers" : [ { "image-name" : "padlock.png", "name" : "padlock" } ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
-    },
-    {
-      "layers" : [ { "image-name" : "magnifier.png", "name" : "magnifier" } ],
-      "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
-    }
+\(groups)
   ],
   "supported-platforms" : {
     "circles" : [ "watchOS" ],
