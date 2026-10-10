@@ -1,9 +1,10 @@
 // Draws FinderSearch's icon designs, all in code (no SF Symbols: their license
 // excludes app icons). B, "private search", is the app icon.
 //
-// usage, from anywhere: swift scripts/make-icon.swift
-// writes docs/images/icon-concepts/{A-folder,B-private,C-content,compare}.png
-// and assets/AppIcon.icns (B drawn at every size macOS uses).
+// usage, from anywhere: swift scripts/make-icon.swift  (needs Xcode, for actool)
+// writes docs/images/icon-concepts/{A-folder,B-private,C-content,compare}.png,
+// the icon source assets/AppIcon.icon, and its compiled forms
+// assets/Assets.car and assets/AppIcon.icns, which the build copies.
 import AppKit
 
 let S: CGFloat = 1024
@@ -184,19 +185,59 @@ for (row, bg, ink) in [(1, rgb(0xECECEC), NSColor.black), (0, rgb(0x1E1E1E), NSC
 }
 save(sheet.makeImage()!, out.appendingPathComponent("compare.png"))
 
-// The app icon: B at each size of an .iconset, packed by iconutil.
-let iconset = FileManager.default.temporaryDirectory.appendingPathComponent("AppIcon-\(getpid()).iconset")
-try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
-defer { try? FileManager.default.removeItem(at: iconset) }
-for points in [16, 32, 128, 256, 512] {
-    save(render(points, drawB), iconset.appendingPathComponent("icon_\(points)x\(points).png"))
-    save(render(points * 2, drawB), iconset.appendingPathComponent("icon_\(points)x\(points)@2x.png"))
+// The app icon: B as an Icon Composer icon (assets/AppIcon.icon), the format
+// current macOS expects; an older-style icon is set on a grey plate. A navy
+// fill and two layers, magnifier and padlock, drawn edge to edge: macOS adds
+// the rounded shape, shadows and glass. actool compiles it into
+// assets/Assets.car and, for older macOS, assets/AppIcon.icns; the build
+// copies those, so it doesn't need actool.
+let iconDir = root.appendingPathComponent("assets/AppIcon.icon")
+let layers = iconDir.appendingPathComponent("Assets")
+try? FileManager.default.removeItem(at: iconDir)
+try FileManager.default.createDirectory(at: layers, withIntermediateDirectories: true)
+// B was drawn in the 824 px body at (100, 100); a layer fills the whole square.
+func layer(_ draw: @escaping (CGContext) -> Void) -> CGImage {
+    render(1024) { ctx in ctx.scaleBy(x: S / 824, y: S / 824); ctx.translateBy(x: -100, y: -100); draw(ctx) }
 }
-let icns = root.appendingPathComponent("assets/AppIcon.icns")
-try FileManager.default.createDirectory(at: icns.deletingLastPathComponent(), withIntermediateDirectories: true)
-let iconutil = Process()
-iconutil.executableURL = URL(fileURLWithPath: "/usr/bin/iconutil")
-iconutil.arguments = ["-c", "icns", iconset.path, "-o", icns.path]
-try iconutil.run(); iconutil.waitUntilExit()
-guard iconutil.terminationStatus == 0 else { fatalError("iconutil failed") }
-print("wrote", out.path, "and", icns.path)
+save(layer { ctx in
+    magnifier(ctx, CGPoint(x: 460, y: 560), r: 205, ring: 48, handle: 250, ringColors: silver, handleColors: silver,
+              glass: [rgb(0x3E5D92, 0.9), rgb(0x1B2B4D, 0.9)])
+}, layers.appendingPathComponent("magnifier.png"))
+save(layer { ctx in padlock(ctx, CGPoint(x: 460, y: 555), 165, rgb(0xFFFFFF)) }, layers.appendingPathComponent("padlock.png"))
+let iconJSON = """
+{
+  "fill" : {
+    "linear-gradient" : [
+      "extended-srgb:0.14118,0.21569,0.36863,1.00000",
+      "extended-srgb:0.05490,0.09020,0.18824,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [ { "image-name" : "padlock.png", "name" : "padlock" } ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
+    },
+    {
+      "layers" : [ { "image-name" : "magnifier.png", "name" : "magnifier" } ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [ "watchOS" ],
+    "squares" : "shared"
+  }
+}
+"""
+try iconJSON.write(to: iconDir.appendingPathComponent("icon.json"), atomically: true, encoding: .utf8)
+
+let assets = root.appendingPathComponent("assets")
+let partial = FileManager.default.temporaryDirectory.appendingPathComponent("AppIcon-\(getpid())-partial.plist")
+defer { try? FileManager.default.removeItem(at: partial) }
+let actool = Process()
+actool.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+actool.arguments = ["actool", iconDir.path, "--compile", assets.path, "--platform", "macosx",
+                    "--minimum-deployment-target", "15.0", "--app-icon", "AppIcon",
+                    "--output-partial-info-plist", partial.path, "--errors", "--warnings"]
+try actool.run(); actool.waitUntilExit()
+guard actool.terminationStatus == 0 else { fatalError("actool failed (it needs Xcode, not just the command line tools)") }
+print("wrote", out.path, "and", assets.path)

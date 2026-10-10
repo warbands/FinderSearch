@@ -1,0 +1,22 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "extended-srgb:0.14118,0.21569,0.36863,1.00000",
+      "extended-srgb:0.05490,0.09020,0.18824,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [ { "image-name" : "padlock.png", "name" : "padlock" } ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
+    },
+    {
+      "layers" : [ { "image-name" : "magnifier.png", "name" : "magnifier" } ],
+      "shadow" : { "kind" : "neutral", "opacity" : 0.5 }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [ "watchOS" ],
+    "squares" : "shared"
+  }
+}

@@ -26,8 +26,9 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources"
 cp "$swift_bin/FinderSearch" "$app/Contents/MacOS/"
 cp vendor/fsearch/target/release/fsearch "$app/Contents/Helpers/"
 cp vendor/fsearch/LICENSE "$app/Contents/Resources/fsearch-LICENSE"
-# Drawn by scripts/make-icon.swift.
-cp assets/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+# Drawn by scripts/make-icon.swift and compiled by actool: Assets.car for
+# current macOS, AppIcon.icns for older versions.
+cp assets/Assets.car assets/AppIcon.icns "$app/Contents/Resources/"
 if [[ -f LICENSE ]]; then
     cp LICENSE "$app/Contents/Resources/FinderSearch-LICENSE"
 fi
@@ -37,6 +38,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>FinderSearch</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleIconName</key><string>AppIcon</string>
 <key>CFBundleIdentifier</key><string>local.findersearch.app</string>
 <key>CFBundleName</key><string>FinderSearch</string>
 <key>CFBundlePackageType</key><string>APPL</string>
