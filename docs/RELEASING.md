@@ -38,8 +38,8 @@ no Gatekeeper warning, and permissions and Keychain access that carry over to up
 ## Before the first public release
 
 - [ ] Bundle identifier chosen and set (step 3 above).
-- [ ] `Info.plist` complete: `CFBundleVersion` (a build number that only goes up),
-      `NSHumanReadableCopyright`, and an app icon.
+- [ ] `Info.plist` complete: `NSHumanReadableCopyright`. (`CFBundleVersion` and the app
+      icon are in place; the icon is drawn by `scripts/make-icon.swift`.)
 - [ ] Third-party license texts shipped inside the app. The Rust crates (fsearch's
       dependencies and RustCrypto's `aes-gcm` family) are MIT or Apache-2.0, which require
       their notices in copies. For example, generate `ThirdPartyLicenses.txt` from
