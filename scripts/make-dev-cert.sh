@@ -1,8 +1,10 @@
 #!/bin/zsh
 # Make a self-signed code-signing identity for local builds. macOS ties Full
-# Disk Access and Keychain access to an app's signature, and an ad-hoc
-# signature changes with every build, so each rebuild loses both. Signed with
-# this identity, rebuilds keep them. scripts/build.sh uses it when present.
+# Disk Access to an app's signature, and an ad-hoc signature changes with
+# every build, so each rebuild loses it. Signed with this identity, rebuilds
+# keep it. (The Keychain still asks once after each rebuild: without an
+# Apple-issued team ID it recognizes the exact build only.) scripts/build.sh
+# uses it when present.
 #
 # Only for builds on this Mac: releases need a Developer ID (docs/RELEASING.md).
 # To remove it: security delete-identity -c "FinderSearch Local Dev"

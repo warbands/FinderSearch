@@ -38,10 +38,12 @@ If you rebuild often, run this once first:
 ```
 
 It adds a self-signed "FinderSearch Local Dev" identity to your login keychain, and
-`build.sh` signs with it from then on. macOS ties Full Disk Access and Keychain access
-to the app's signature; an ad-hoc signature changes with every build, so without it
-each rebuild asks for both again. It's for builds on your own Mac only; releases use
-a Developer ID (see [RELEASING.md](RELEASING.md)).
+`build.sh` signs with it from then on. macOS ties Full Disk Access to the app's
+signature; an ad-hoc signature changes with every build, so without it each rebuild
+loses Full Disk Access. The Keychain still asks for your password once after each
+rebuild (it only recognizes later builds as the same app when they carry an
+Apple-issued team ID), never on ordinary launches. It's for builds on your own Mac
+only; releases use a Developer ID (see [RELEASING.md](RELEASING.md)), which ends both.
 
 Quit and reopen the app after rebuilding. `dist/` and build caches are generated
 locally and excluded from version control. This project does not yet provide a

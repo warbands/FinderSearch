@@ -38,6 +38,7 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>CFBundleName</key><string>FinderSearch</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.2.0</string>
+<key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
@@ -46,7 +47,7 @@ PLIST
 # app's Full Disk Access. Signed with SIGN_IDENTITY for a release (a Developer
 # ID, see docs/RELEASING.md); otherwise with the local identity from
 # scripts/make-dev-cert.sh if you made one, so rebuilds keep their Full Disk
-# Access and Keychain access; otherwise ad-hoc.
+# Access; otherwise ad-hoc.
 identity="${SIGN_IDENTITY:-}"
 if [[ -z "$identity" ]] && security find-certificate -c "FinderSearch Local Dev" >/dev/null 2>&1; then
     identity="FinderSearch Local Dev"
