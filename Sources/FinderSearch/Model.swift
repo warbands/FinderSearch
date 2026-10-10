@@ -59,6 +59,8 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
     @Published var error: String?
     @Published var ready = false
     @Published var entries = 0
+    /// Files still to be read into the content index.
+    @Published var contentPending = 0
     @Published var elapsed: Double = 0
     @Published var preview: Hit?
     @Published var viewMode =
@@ -258,6 +260,11 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
                         fields["type"] = type
                     }
                     let reply = try await engine.request(fields)
+                    // Still building the index: the search runs again once it's ready.
+                    if !reply.ok && !ready {
+                        guard revision == generation, !Task.isCancelled else { return }
+                        hits = []; loading = false; searching = false; return
+                    }
                     guard reply.ok else {
                         throw Engine.Failure.message(reply.error ?? "Search failed")
                     }
@@ -339,10 +346,14 @@ struct FileJournal { let name: String; let operations: [FileMutation] }
                 let becameReady = status.ok && !ready; if ready != status.ok { ready = status.ok }
                 if status.ok {
                     if entries != status.entries ?? 0 { entries = status.entries ?? 0 };
+                    if contentPending != status.content_pending ?? 0 {
+                        contentPending = status.content_pending ?? 0
+                    }
                     if becameReady && (isSearch || route == "recents") { schedule() }
                 }
             } catch { if isSearch { self.error = error.localizedDescription } }
-            try? await Task.sleep(for: .seconds(5))
+            // Closely while indexing, so the status line keeps up.
+            try? await Task.sleep(for: .seconds(ready && contentPending == 0 ? 5 : 1))
         }; statusStarted = false
     }
     func open(_ item: Hit? = nil) {

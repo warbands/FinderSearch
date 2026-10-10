@@ -23,6 +23,8 @@ struct Reply: Decodable {
     let took_us: UInt64?
     let entries: Int?
     let full_disk_access: Bool?
+    /// Files still to be read into the content index.
+    var content_pending: Int? = nil
 }
 
 protocol SearchService: Sendable {

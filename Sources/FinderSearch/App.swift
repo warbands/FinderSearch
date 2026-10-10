@@ -429,6 +429,14 @@ struct BrowserView: View {
             ColumnBrowser(model: model, focusFiles: { focusFiles() })
         } else if (model.loading || model.searching) && model.sortedHits.isEmpty {
             FolderLoadingSkeleton(mode: model.viewMode, iconSize: iconSize)
+        } else if model.sortedHits.isEmpty && (model.isSearch || model.route == "recents") && !model.ready {
+            ContentUnavailableView {
+                Label("Indexing Your Mac", systemImage: "magnifyingglass")
+            } description: {
+                Text("Results will appear as soon as the index is ready.")
+            } actions: {
+                ProgressView().controlSize(.small)
+            }
         } else if model.sortedHits.isEmpty {
             ContentUnavailableView {
                 Label(
@@ -534,9 +542,24 @@ struct BrowserView: View {
             }
         }.background(Color(nsColor: .windowBackgroundColor))
     }
+    /// "4.8 million", or the exact number below a million.
+    static func count(_ n: Int) -> String {
+        n >= 1_000_000
+            ? (Double(n) / 1_000_000).formatted(.number.precision(.fractionLength(1))) + " million"
+            : n.formatted()
+    }
     private var statusBar: some View {
         HStack {
-            if model.loading || model.searching || model.busy { ProgressView().controlSize(.mini) }
+            if !model.ready || model.contentPending > 0 {
+                ProgressView().controlSize(.mini)
+                Text(
+                    !model.ready
+                        ? "Indexing your Mac…"
+                        : "Indexing file contents… \(model.contentPending.formatted()) to go")
+                Text("·")
+            } else if model.loading || model.searching || model.busy {
+                ProgressView().controlSize(.mini)
+            }
             Text(
                 model.selection.isEmpty
                     ? (model.isSearch && model.hits.count == 500
@@ -544,6 +567,9 @@ struct BrowserView: View {
                     : "\(model.selection.count) selected")
             if model.isSearch { Text(String(format: "· %.1f ms", model.elapsed)).monospacedDigit() }
             Spacer()
+            if model.ready && model.contentPending == 0 && model.entries > 0 {
+                Text("\(Self.count(model.entries)) files indexed")
+            }
             if model.viewMode == .icons {
                 Image(systemName: "square").font(.system(size: 8));
                 Slider(value: $iconSize, in: 40...96).frame(width: 100).accessibilityLabel(
