@@ -12,12 +12,11 @@
 //! knows about with the docs we hold, reindex what changed, tombstone what
 //! went away. The first build is just a sync of $HOME.
 
-use crate::index::{HDR, as_bytes, fields, header, layout, sec};
+use crate::index::{HDR, as_bytes, fields, header, layout};
 use crate::live::{Live, join};
 use crate::query::{GrepMode, Query, fold};
 use crate::seal;
 use crate::walk::KIND_FILE;
-use memmap2::Mmap;
 use rayon::prelude::*;
 use regex::bytes::{Regex, RegexBuilder};
 use regex_syntax::hir::{Class, Hir, HirKind};
@@ -73,12 +72,15 @@ const TEXT_EXTS: &[&[u8]] = &[
 ];
 
 pub struct Segment {
-    map: Mmap,
+    /// Sealed segments are decrypted as they're read: a search reads a few
+    /// posting lists, so most of the postings never need memory.
+    map: seal::Bytes,
+    /// Sections made readable whole, once (see `lazy_sec`).
+    whole: [std::sync::OnceLock<()>; NS],
     pub id: u64,
     pub ndocs: usize,
     ndocs1: usize,
     ntri: usize,
-    ntri1: usize,
     plen: usize,
     paths_len: usize,
     off: [usize; NS],
@@ -104,16 +106,48 @@ fn lens(ndocs: usize, ntri: usize, plen: usize, paths_len: usize) -> [usize; NS]
     [ntri * 4, (ntri + 1) * 4, plen, (ndocs + 1) * 4, paths_len, ndocs * 8, ndocs * 4, ndocs * 4, ndocs]
 }
 
+/// A whole section as a slice, decrypted the first time it's asked for.
+macro_rules! lazy_sec {
+    ($name:ident, $s:expr, $t:ty, $len:ident) => {
+        pub fn $name(&self) -> &[$t] {
+            let (at, n) = (self.off[$s as usize], self.$len * std::mem::size_of::<$t>());
+            self.whole[$s as usize].get_or_init(|| self.map.ensure(at, n));
+            unsafe { std::slice::from_raw_parts(self.map.as_ptr().add(at) as *const $t, self.$len) }
+        }
+    };
+}
+
 impl Segment {
-    sec!(tri_key, S::TriKey, u32, ntri);
-    sec!(tri_off, S::TriOff, u32, ntri1);
-    sec!(post, S::Post, u8, plen);
-    sec!(path_off, S::PathOff, u32, ndocs1);
-    sec!(paths, S::Paths, u8, paths_len);
-    sec!(size, S::Size, u64, ndocs);
-    sec!(mtime, S::Mtime, u32, ndocs);
-    sec!(by_path, S::ByPath, u32, ndocs);
-    sec!(rank, S::Rank, i8, ndocs);
+    // The trigram keys and postings are read a few entries at a time
+    // (`find_tri`, `list_into`); only a merge walks all the keys.
+    lazy_sec!(tri_key, S::TriKey, u32, ntri);
+    lazy_sec!(path_off, S::PathOff, u32, ndocs1);
+    lazy_sec!(paths, S::Paths, u8, paths_len);
+    lazy_sec!(size, S::Size, u64, ndocs);
+    lazy_sec!(mtime, S::Mtime, u32, ndocs);
+    lazy_sec!(by_path, S::ByPath, u32, ndocs);
+    lazy_sec!(rank, S::Rank, i8, ndocs);
+
+    /// Entry `i` of a u32 section, decrypting only the chunk it's in.
+    #[inline]
+    fn u32_at(&self, s: S, i: usize) -> u32 {
+        u32::from_ne_bytes(self.map.range(self.off[s as usize] + i * 4, 4).try_into().unwrap())
+    }
+
+    /// Where `tri` is among the sorted keys: a binary search that decrypts
+    /// only the chunks it probes.
+    fn find_tri(&self, tri: u32) -> Option<usize> {
+        let (mut lo, mut hi) = (0, self.ntri);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            match self.u32_at(S::TriKey, mid).cmp(&tri) {
+                std::cmp::Ordering::Less => lo = mid + 1,
+                std::cmp::Ordering::Greater => hi = mid,
+                std::cmp::Ordering::Equal => return Some(mid),
+            }
+        }
+        None
+    }
 
     pub fn path(&self, d: u32) -> &[u8] {
         let o = self.path_off();
@@ -173,16 +207,17 @@ impl Segment {
 
     fn postings(&self, tri: u32) -> Vec<u32> {
         let mut out = Vec::new();
-        if let Ok(k) = self.tri_key().binary_search(&tri) {
+        if let Some(k) = self.find_tri(tri) {
             self.list_into(k, &mut out);
         }
         out
     }
 
     fn list_into(&self, k: usize, out: &mut Vec<u32>) {
-        let o = self.tri_off();
-        let mut bytes = &self.post()[(o[k] & !BITSET) as usize..(o[k + 1] & !BITSET) as usize];
-        if o[k] & BITSET != 0 {
+        let (a, b) = (self.u32_at(S::TriOff, k), self.u32_at(S::TriOff, k + 1));
+        let (start, end) = ((a & !BITSET) as usize, (b & !BITSET) as usize);
+        let mut bytes = self.map.range(self.off[S::Post as usize] + start, end - start);
+        if a & BITSET != 0 {
             for (w, &b) in bytes.iter().enumerate() {
                 let mut b = b;
                 while b != 0 {
@@ -203,8 +238,8 @@ impl Segment {
 
     fn load(dir: &Path, id: u64) -> Option<Segment> {
         let p = seg_path(dir, id);
-        let map = seal::open(&p, &seal::name(&p))?;
-        let [ndocs, ntri, plen, paths_len] = fields(&map, MAGIC)?.map(|v| v as usize);
+        let map = seal::open_lazy(&p, &seal::name(&p))?;
+        let [ndocs, ntri, plen, paths_len] = fields(map.range(0, HDR.min(map.len())), MAGIC)?.map(|v| v as usize);
         let (off, total) = layout(&lens(ndocs, ntri, plen, paths_len));
         if map.len() < total {
             return None;
@@ -216,7 +251,7 @@ impl Segment {
             }
         }
         let live_docs = ndocs - dead.iter().map(|w| w.count_ones() as usize).sum::<usize>();
-        Some(Segment { map, id, ndocs, ndocs1: ndocs + 1, ntri, ntri1: ntri + 1, plen, paths_len, off, dead, live_docs })
+        Some(Segment { map, whole: Default::default(), id, ndocs, ndocs1: ndocs + 1, ntri, plen, paths_len, off, dead, live_docs })
     }
 
     fn save_dead(&self, dir: &Path) {

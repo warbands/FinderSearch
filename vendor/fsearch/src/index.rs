@@ -77,7 +77,6 @@ macro_rules! sec {
         }
     };
 }
-pub(crate) use sec;
 
 impl Index {
     // Per distinct name: char mask, offset into `names` (u + 1 entries).

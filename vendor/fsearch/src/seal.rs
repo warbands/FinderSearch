@@ -17,7 +17,8 @@ use rayon::prelude::*;
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 const MAGIC: &[u8; 8] = b"FSSEAL01";
 const HEAD: usize = 24;
@@ -177,6 +178,118 @@ fn open_with(key: Option<&Aes256Gcm>, path: &Path, name: &str) -> Option<Mmap> {
         open_chunk(cipher, &prefix, &aad, i, dst, &map[at + dst.len()..at + dst.len() + TAG])
     });
     if ok { out.make_read_only().ok() } else { None }
+}
+
+/// A file `Writer` wrote, readable a range at a time: `ensure` a range, then
+/// read it through `as_ptr`. Sealed files are decrypted a chunk at a time on
+/// first use, into anonymous memory the kernel backs only once written, so
+/// the parts never read cost no memory. Every chunk's tag is still checked
+/// when the file is opened: a damaged or foreign file is refused up front.
+pub enum Bytes {
+    Plain(Mmap),
+    Lazy(Lazy),
+}
+
+pub struct Lazy {
+    file: Mmap,
+    /// Owns the plaintext buffer `base` points into.
+    _out: MmapMut,
+    base: *mut u8,
+    len: usize,
+    ready: Vec<AtomicBool>,
+    lock: Mutex<()>,
+    cipher: &'static Aes256Gcm,
+    prefix: [u8; 8],
+    aad: Vec<u8>,
+}
+
+// `base` is only written by `decrypt`, one chunk once under `lock`, before
+// `ready` publishes it; readers only read chunks `ready` has published.
+unsafe impl Send for Lazy {}
+unsafe impl Sync for Lazy {}
+
+impl Bytes {
+    pub fn len(&self) -> usize {
+        match self {
+            Bytes::Plain(m) => m.len(),
+            Bytes::Lazy(l) => l.len,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn as_ptr(&self) -> *const u8 {
+        match self {
+            Bytes::Plain(m) => m.as_ptr(),
+            Bytes::Lazy(l) => l.base,
+        }
+    }
+
+    /// Make `start..start + n` readable.
+    #[inline]
+    pub fn ensure(&self, start: usize, n: usize) {
+        if let Bytes::Lazy(l) = self
+            && n > 0
+        {
+            for i in start / CHUNK..=(start + n - 1) / CHUNK {
+                if !l.ready[i].load(Ordering::Acquire) {
+                    l.decrypt(i);
+                }
+            }
+        }
+    }
+
+    /// `start..start + n`, made readable first.
+    pub fn range(&self, start: usize, n: usize) -> &[u8] {
+        assert!(start + n <= self.len());
+        self.ensure(start, n);
+        unsafe { std::slice::from_raw_parts(self.as_ptr().add(start), n) }
+    }
+}
+
+impl Lazy {
+    #[cold]
+    fn decrypt(&self, i: usize) {
+        let _one = self.lock.lock().unwrap();
+        if self.ready[i].load(Ordering::Relaxed) {
+            return;
+        }
+        let (at, n) = (HEAD + i * (CHUNK + TAG), (self.len - i * CHUNK).min(CHUNK));
+        // This chunk's bytes, written once before `ready` says so; no reader
+        // looks at them until then, and other chunks are disjoint.
+        let dst = unsafe { std::slice::from_raw_parts_mut(self.base.add(i * CHUNK), n) };
+        dst.copy_from_slice(&self.file[at..at + n]);
+        // Checked when opened: failing now means the file changed under us.
+        assert!(open_chunk(self.cipher, &self.prefix, &self.aad, i, dst, &self.file[at + n..at + n + TAG]), "sealed file changed while open");
+        self.ready[i].store(true, Ordering::Release);
+    }
+}
+
+/// Open a file `Writer` wrote for reading a range at a time (see `Bytes`).
+/// None as for `open`.
+pub fn open_lazy(path: &Path, name: &str) -> Option<Bytes> {
+    open_lazy_with(KEY.get(), path, name)
+}
+
+fn open_lazy_with(key: Option<&'static Aes256Gcm>, path: &Path, name: &str) -> Option<Bytes> {
+    let Some(cipher) = key else { return open_with(None, path, name).map(Bytes::Plain) };
+    let file = unsafe { Mmap::map(&File::open(path).ok()?) }.ok()?;
+    let (len, prefix) = parse(&file)?;
+    if len == 0 || file.len() != HEAD + len + chunks(len) * TAG {
+        return None;
+    }
+    let aad = aad(name, &file);
+    let ok = (0..chunks(len)).into_par_iter().all(|i| {
+        let (at, n) = (HEAD + i * (CHUNK + TAG), (len - i * CHUNK).min(CHUNK));
+        let mut scratch = file[at..at + n].to_vec();
+        open_chunk(cipher, &prefix, &aad, i, &mut scratch, &file[at + n..at + n + TAG])
+    });
+    let mut out = MmapMut::map_anon(len).ok()?;
+    let base = out.as_mut_ptr();
+    let ready = (0..chunks(len)).map(|_| AtomicBool::new(false)).collect();
+    ok.then(|| Bytes::Lazy(Lazy { file, _out: out, base, len, ready, lock: Mutex::new(()), cipher, prefix, aad }))
 }
 
 /// Write a small file whole, sealed when a key is set.
@@ -355,6 +468,38 @@ mod tests {
         bad[HEAD] ^= 1;
         std::fs::write(&p, &bad).unwrap();
         assert!(read_with(Some(k), &p, "skipped").is_none());
+    }
+
+    #[test]
+    fn lazy_reads_match_and_refuse_what_open_refuses() {
+        let (k, d) = (cipher(9), dir());
+        let p = d.join("seg-000002.fsc");
+        let bytes = data(3 * CHUNK + 777);
+        write(Some(k), &p, "seg-000002.fsc", &bytes);
+        let Some(b @ Bytes::Lazy(_)) = open_lazy_with(Some(k), &p, "seg-000002.fsc") else { panic!("not lazy") };
+        // Ranges inside one chunk, across a boundary, the tail, and the whole.
+        for (start, n) in [(5, 10), (CHUNK - 3, 9), (3 * CHUNK + 700, 77), (0, bytes.len())] {
+            assert_eq!(b.range(start, n), &bytes[start..start + n]);
+        }
+        assert!(open_lazy_with(Some(cipher(10)), &p, "seg-000002.fsc").is_none(), "another key");
+        assert!(open_lazy_with(Some(k), &p, "seg-000003.fsc").is_none(), "another file's name");
+        let mut bad = std::fs::read(&p).unwrap();
+        bad[HEAD + 2 * (CHUNK + TAG) + 1] ^= 1; // a chunk no range above was in yet
+        std::fs::write(&p, &bad).unwrap();
+        assert!(open_lazy_with(Some(k), &p, "seg-000002.fsc").is_none(), "tampered, even where unread");
+    }
+
+    #[test]
+    fn lazy_decrypts_only_what_is_read() {
+        let (k, d) = (cipher(11), dir());
+        let p = d.join("big");
+        write(Some(k), &p, "big", &data(8 * CHUNK));
+        let Some(Bytes::Lazy(l)) = open_lazy_with(Some(k), &p, "big") else { panic!("not lazy") };
+        let b = Bytes::Lazy(l);
+        b.range(CHUNK + 10, 20);
+        let Bytes::Lazy(l) = &b else { unreachable!() };
+        let done: Vec<bool> = l.ready.iter().map(|r| r.load(Ordering::Relaxed)).collect();
+        assert_eq!(done, [false, true, false, false, false, false, false, false]);
     }
 
     #[test]

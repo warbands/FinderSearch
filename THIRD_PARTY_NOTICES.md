@@ -15,7 +15,8 @@ FinderSearch's filename search is powered by **fsearch**, created by **Noah Dunn
 - `src/seal.rs` (new), with calls from `src/index.rs`, `src/content.rs` and
   `src/engine.rs`: encryption at rest. With a key, the name index, content
   segments and skipped-folder list are sealed with AES-256-GCM; without one,
-  files are written as upstream writes them. This adds the RustCrypto
+  files are written as upstream writes them. Content segments are decrypted a
+  chunk at a time as searches read them (`seal::Bytes`), not loaded whole. This adds the RustCrypto
   `aes-gcm` crate and its dependencies, all MIT OR Apache-2.0, to `Cargo.lock`.
 - `src/walk.rs`, `src/live.rs`: other local drives in /Volumes are indexed (upstream
   stops at the startup volume), and changes reported on drives the index doesn't

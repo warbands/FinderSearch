@@ -83,9 +83,11 @@ protects it without anything to set up:
 **FinderSearch → Forget Search Data…** deletes the index and its key; a new index is built
 straight away. Nothing is lost: the index only describes files that are still on disk.
 
-While the app is open, the decrypted index is held in memory. Measured on one Mac with
-4.8 million files and 96,000 text files: about 370 MB, peaking near 670 MB during the
-first full build. It grows with the number of files you have. If the Keychain denies access to the key, the app
+While the app is open, the name index is held decrypted in memory; the index of file
+contents is decrypted a piece at a time, as searches need it. Measured on one Mac with
+4.9 million files and 97,000 text files: about 255 MB at rest, around 325 MB after a
+round of content searches, and near 690 MB at peak during the first full build. It
+grows with the number of files you have. If the Keychain denies access to the key, the app
 uses a key for that session only and rebuilds the index.
 
 Protected folders, network volumes, unmounted drives, and cloud providers still
