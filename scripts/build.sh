@@ -43,11 +43,19 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 # Hardened runtime: no injected code (DYLD_INSERT_LIBRARIES) borrowing the
-# app's Full Disk Access. Ad-hoc unless SIGN_IDENTITY names a Developer ID
-# Application identity (see docs/RELEASING.md).
-identity="${SIGN_IDENTITY:--}"
+# app's Full Disk Access. Signed with SIGN_IDENTITY for a release (a Developer
+# ID, see docs/RELEASING.md); otherwise with the local identity from
+# scripts/make-dev-cert.sh if you made one, so rebuilds keep their Full Disk
+# Access and Keychain access; otherwise ad-hoc.
+identity="${SIGN_IDENTITY:-}"
+if [[ -z "$identity" ]] && security find-certificate -c "FinderSearch Local Dev" >/dev/null 2>&1; then
+    identity="FinderSearch Local Dev"
+fi
+identity="${identity:--}"
 sign=(codesign --force --sign "$identity" --options runtime)
-[[ "$identity" == - ]] || sign+=(--timestamp)
+if [[ "$identity" == "Developer ID"* ]]; then
+    sign+=(--timestamp)
+fi
 "${sign[@]}" "$app/Contents/Helpers/fsearch"
 "${sign[@]}" "$app"
 codesign --verify --deep --strict "$app"

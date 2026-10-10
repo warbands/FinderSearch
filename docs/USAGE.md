@@ -27,9 +27,21 @@ open dist/FinderSearch.app
 ```
 
 The script builds the vendored engine with its lockfile, builds the native app,
-embeds the helper and upstream license, and verifies its ad-hoc signature.
+embeds the helper and upstream license, signs it and verifies the signature.
 The first Rust build downloads dependencies. A separate fsearch installation
 is not required.
+
+If you rebuild often, run this once first:
+
+```sh
+./scripts/make-dev-cert.sh
+```
+
+It adds a self-signed "FinderSearch Local Dev" identity to your login keychain, and
+`build.sh` signs with it from then on. macOS ties Full Disk Access and Keychain access
+to the app's signature; an ad-hoc signature changes with every build, so without it
+each rebuild asks for both again. It's for builds on your own Mac only; releases use
+a Developer ID (see [RELEASING.md](RELEASING.md)).
 
 Quit and reopen the app after rebuilding. `dist/` and build caches are generated
 locally and excluded from version control. This project does not yet provide a
